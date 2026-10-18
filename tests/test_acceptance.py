@@ -6,6 +6,7 @@ these tests rather than writing new ones (see AGENTS.md).
 journeys covered: launch+lore, add person, select person (natal/aspects/
 transits), delete person, bad-input rejection, quit.
 """
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -191,4 +192,54 @@ async def test_journey_refresh_reloads_current_person(app):
         await pilot.press("r")
         await pilot.pause()
         assert app.query_one("#natal-out").content == natal_before
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_city_search_autofills(app, monkeypatch):
+    """type in the search bar -> pick a result -> city/lon/lat/zone/dst autofill."""
+    import asyncio
+
+    from textual.widgets import Input
+
+    from astro_tui.geo import City
+
+    fake = City(name="Austin", admin1="Texas", country="United States",
+                lat=30.2672, lon=-97.7431, timezone="America/Chicago",
+                population=965000)
+    monkeypatch.setattr(app_module.geo, "search_cities", lambda q, **kw: [fake])
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("n")
+        form = app.query_one("#form")
+        # type into the search input and hit enter
+        search = form.query_one("#field-search", Input)
+        search.value = "austin"
+        search.focus()  # real user flow: click/tab into the search bar
+        await pilot.press("enter")
+        await pilot.pause()
+        # search runs in a worker thread — poll until results land
+        for _ in range(50):
+            lv = form.query_one("#city-results")
+            if lv.display and lv.children:
+                break
+            await asyncio.sleep(0.05)
+        lv = form.query_one("#city-results")
+        assert lv.display, "results list never appeared"
+        assert "Austin" in str(lv.children[0].children[0].content)
+        # user picks the first result (enter on the list view)
+        await pilot.press("enter")
+        await pilot.pause()
+        assert form.fields["city"].value == "Austin, Texas"
+        assert form.fields["lon"].value == "97W45"
+        assert form.fields["lat"].value == "30N16"
+        # fill birth date/time -> save -> zone/dst recomputed from the city tz
+        for k, v in {"name": "Geo Kid", "month": "5", "day": "15",
+                     "year": "1990", "time": "12:30PM"}.items():
+            set_field(app, k, v)
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        saved = app_module.people_dir() / "geo-kid.json"
+        meta = json.loads(saved.read_text())
+        assert meta["zone"] == "5W" and meta["dst"] == 1  # CDT, not manual 6W
         await pilot.press("q")
