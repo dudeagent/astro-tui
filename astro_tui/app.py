@@ -6,13 +6,14 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, Footer, Header, Input, Label, Static
+from textual.widgets import Button, Footer, Header, Input, Label, ListView, ListItem, Static
 from textual.widgets import DataTable, TabbedContent, TabPane
 
-from . import astrolog, lore
+from . import astrolog, geo, lore
 
 DATA_DIR = Path(os.environ.get("ASTRO_TUI_DATA", Path.home() / ".astro-tui"))
 
@@ -46,6 +47,9 @@ class PersonForm(Static):
 
     def compose(self) -> ComposeResult:
         self.fields = {}
+        self.picked_city: geo.City | None = None
+        yield Input(placeholder="city search — type name, press enter", id="field-search")
+        yield ListView(id="city-results")
         defaults = [
             ("name", "name"), ("city", "city"),
             ("month", "month (1-12)"), ("day", "day"), ("year", "year"),
@@ -60,6 +64,63 @@ class PersonForm(Static):
         yield Button("save", id="btn-save", variant="primary")
         yield Button("cancel", id="btn-cancel")
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "field-search":
+            self._run_search(event.input.value)
+
+    @work(thread=True, exclusive=True)
+    def _run_search(self, query: str) -> None:
+        results = geo.search_cities(query)
+        self.app.call_from_thread(self._show_results, results)
+
+    def _show_results(self, results: list[geo.City]) -> None:
+        lv = self.query_one("#city-results", ListView)
+        lv.clear()
+        if not results:
+            lv.append(ListItem(Label(f"no matches (offline? type coords manually)")))
+        for city in results:
+            item = ListItem(Label(city.label))
+            item.data = city
+            lv.append(item)
+        lv.display = True
+        lv.index = 0  # highlighted_child is None otherwise -> enter selects nothing
+        lv.focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        city = getattr(event.item, "data", None)
+        if city is None:
+            return
+        self._apply_city(city)
+
+    def _apply_city(self, city: geo.City) -> None:
+        """autofill city/lon/lat + tz-derived zone/dst for the current date/time."""
+        self.picked_city = city
+        self.fields["city"].value = f"{city.name}, {city.admin1}".strip(", ") if city.admin1 else city.name
+        self.fields["lon"].value = geo.to_astrolog_lon(city.lon)
+        self.fields["lat"].value = geo.to_astrolog_lat(city.lat)
+        try:
+            self._apply_zone_dst()
+        except ValueError:
+            pass  # date/time not filled in yet; recomputed at save
+        lv = self.query_one("#city-results", ListView)
+        lv.display = False
+        lv.blur()
+        self.fields["name"].focus()
+        self.app.notify(f"picked {city.label} ({city.timezone})")
+
+    def _apply_zone_dst(self) -> None:
+        """recompute dst+zone from picked city's tz and current date/time fields."""
+        if not self.picked_city:
+            return
+        dst, zone = geo.tz_to_astrolog(
+            self.picked_city.timezone,
+            int(self.fields["year"].value or 2000),
+            int(self.fields["month"].value or 1),
+            int(self.fields["day"].value or 1),
+            self.fields["time"].value or "12:00PM")
+        self.fields["dst"].value = str(dst)
+        self.fields["zone"].value = zone
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
             self._save()
@@ -67,7 +128,11 @@ class PersonForm(Static):
             self._hide()
 
     def _save(self) -> None:
-        from textual.app import App
+        # tz-derived dst/zone from the picked city win over stale form values
+        try:
+            self._apply_zone_dst()
+        except ValueError:
+            pass  # manual-entry path (no picked city) keeps whatever user typed
         data = {k: v.value.strip() for k, v in self.fields.items()}
         try:
             person = astrolog.Person(
@@ -97,6 +162,8 @@ class PersonForm(Static):
         self._hide()
 
     def _hide(self) -> None:
+        self.picked_city = None
+        self.query_one("#city-results", ListView).display = False
         self.remove_class("shown")
         self.app.query_one("#people-table").focus()
 
@@ -112,6 +179,7 @@ class AstroApp(App):
     .pre { overflow-y: auto; }
     #form { display: none; border: heavy $accent; padding: 1; max-width: 50; }
     #form.shown { display: block; }
+    #city-results { display: none; height: auto; max-height: 10; border-top: solid $primary; }
     DataTable { height: 1fr; }
     """
     BINDINGS = [
