@@ -23,7 +23,7 @@
           src = self;
           propagatedBuildInputs = [ python.pkgs.textual ];
           nativeBuildInputs = [ python.pkgs.setuptools ];
-          nativeCheckInputs = [ python.pkgs.pytest pkgs.astrolog ];
+          nativeCheckInputs = [ python.pkgs.pytest python.pkgs.pytest-asyncio pkgs.astrolog ];
           # runtime: the app shells out to the astrolog binary, so it has to
           # be on PATH inside the app env, not just at build time.
           postFixup = ''
@@ -45,7 +45,7 @@
         packages.default = astro-tui;
         packages.astro-tui = astro-tui;
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.astrolog python python.pkgs.textual python.pkgs.pytest ];
+          buildInputs = [ pkgs.astrolog python python.pkgs.textual python.pkgs.pytest python.pkgs.pytest-asyncio ];
         };
         apps.default = flake-utils.lib.mkApp { drv = astro-tui; };
       });
