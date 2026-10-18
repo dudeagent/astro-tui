@@ -93,7 +93,8 @@ class PersonForm(Static):
             ("name", "city", "year", "month", "day", "time", "dst", "zone", "lon", "lat")
         }))
         self.app.notify(f"saved {slug}")
-        self.dismiss(None)
+        self.app.load_people()
+        self._hide()
 
     def _hide(self) -> None:
         self.remove_class("shown")
@@ -151,6 +152,9 @@ class AstroApp(App):
     def on_mount(self) -> None:
         table = self.query_one("#people-table", DataTable)
         table.add_columns("name", "birth")
+        # people are picked row-by-row; default cursor_type is "cell",
+        # which posts CellSelected and never fires on_data_table_row_selected
+        table.cursor_type = "row"
         self.load_people()
 
     def load_people(self) -> None:
@@ -178,7 +182,7 @@ class AstroApp(App):
                 render_aspects(astrolog.natal_aspects(person.path)))
             self.query_one("#transits-out", Static).update(
                 "now (sorted by influence):\n" +
-                render_aspects(astrolog.parse_aspects(astrolog.transits_today(person.path))))
+                render_aspects(astrolog.transits_today(person.path)))
             self.set_focus(None)
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")
@@ -186,7 +190,9 @@ class AstroApp(App):
     def action_new_person(self) -> None:
         form = self.query_one("#form", PersonForm)
         form.add_class("shown")
-        form.set_focus(True)
+        # PersonForm is a Static (not focusable itself) — focus the first
+        # Input instead so keys (incl. escape -> cancel) reach the form.
+        form.query_one("#field-name", Input).focus()
 
     def action_delete_person(self) -> None:
         if self.selected and self.selected.path:

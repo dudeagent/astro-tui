@@ -1,0 +1,194 @@
+"""acceptance tests: drive the real TUI the way a user does.
+
+uses textual's run_test() pilot — no mocks for the app layer. these
+tests ARE the spec for the main journeys; when features change, update
+these tests rather than writing new ones (see AGENTS.md).
+journeys covered: launch+lore, add person, select person (natal/aspects/
+transits), delete person, bad-input rejection, quit.
+"""
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from astro_tui import app as app_module  # noqa: E402
+from astro_tui import astrolog  # noqa: E402
+
+HAS_ASTROLOG = shutil.which(astrolog.ASTROLOG) is not None
+
+
+@pytest.fixture()
+def app():
+    """a real AstroApp with a temp data dir, driven via run_test()."""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp())
+    app_module.DATA_DIR = tmp  # people_dir() reads the module global
+    a = app_module.AstroApp()
+    yield a
+    shutil.rmtree(tmp, ignore_errors=True)
+
+
+async def seed_person(app, name="Test", city="Nowhere"):
+    """create a chart file through astrolog, reload the people table."""
+    person = astrolog.Person(name=name, city=city, year=1990, month=5,
+                             day=15, time="12:30PM", dst=0, zone="6W",
+                             lon="97W37", lat="30N28")
+    out = app_module.people_dir() / f"{name.lower()}.chart"
+    astrolog.create_chart(person, out)
+    person.path = out  # create_chart writes the file but doesn't set .path
+    app.load_people()
+    return person
+
+
+def form_visible(app):
+    return "shown" in app.query_one("#form").classes
+
+
+def set_field(app, key, value):
+    from textual.widgets import Input
+    inp = app.query_one(f"#field-{key}", Input)
+    inp.value = value
+
+
+async def test_launch_renders_people_table_and_lore(app):
+    async with app.run_test(size=(120, 40)) as pilot:
+        table = app.query_one("#people-table")
+        assert table.row_count == 0
+        lore = app.query_one("#lore-out").content
+        assert "sephiroth" in lore and "lunar mansions" in lore
+        # main tabs all exist
+        for tab in ("tab-natal", "tab-aspects", "tab-transits",
+                    "tab-synastry", "tab-lore", "tab-hi"):
+            app.query_one(f"#{tab}")
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_add_person_via_form(app):
+    """press n -> form opens -> fill fields -> save -> person in table + file on disk."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        assert not form_visible(app)
+        await pilot.press("n")            # add-person binding
+        assert form_visible(app)
+        fields = {"name": "John Doe", "city": "Austin",
+                  "month": "5", "day": "15", "year": "1990",
+                  "time": "7:00AM", "dst": "0", "zone": "6W",
+                  "lon": "97W37", "lat": "30N28"}
+        for k, v in fields.items():
+            set_field(app, k, v)
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        # form closed, file written, table repopulated
+        assert not form_visible(app)
+        saved = app_module.people_dir() / "john-doe.chart"
+        assert saved.exists() and saved.with_suffix(".json").exists()
+        table = app.query_one("#people-table")
+        assert table.row_count == 1
+        assert "John Doe" in str(table.get_row_at(0))
+        # the chart on disk must round-trip back to the same metadata
+        back = astrolog.parse_chart_header(saved)
+        assert back.name == "John Doe" and back.year == 1990
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_cancel_add_person(app):
+    """open form, change mind, escape -> nothing written."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("n")
+        set_field(app, "name", "Ghost")
+        await pilot.press("escape")
+        assert not form_visible(app)
+        assert list(app_module.people_dir().glob("*.chart")) == []
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_bad_input_rejected(app):
+    """garbage numbers -> error notify, form stays open, no file."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.press("n")
+        set_field(app, "name", "Bad")
+        set_field(app, "month", "notanumber")
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        assert not list(app_module.people_dir().glob("*.chart"))
+        await pilot.press("escape")
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_duplicate_name_rejected(app):
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app, name="Dup")
+        await pilot.press("n")
+        set_field(app, "name", "Dup")
+        set_field(app, "month", "1")
+        set_field(app, "day", "1")
+        set_field(app, "year", "1990")
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        # original untouched, no second chart
+        charts = list(app_module.people_dir().glob("*.chart"))
+        assert [c.name for c in charts] == ["dup.chart"]
+        await pilot.press("escape")
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_select_person_shows_natal_aspects_transits(app):
+    """click a person row -> natal/aspects/transits tabs populate."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        key = app.people[0].path
+        # real user flow: focus the table, press enter to select the row
+        # (direct action_select_cursor() calls don't fire RowSelected reliably)
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        natal = app.query_one("#natal-out").content
+        assert "Test" in str(natal) and "5/15/1990" in str(natal) and "Nowhere" in str(natal)
+        assert "Sun" in str(natal) and "house" in str(natal)
+        aspects = app.query_one("#aspects-out").content
+        assert "orb" in str(aspects) and "power" in str(aspects)
+        transits = app.query_one("#transits-out").content
+        assert "sorted by influence" in str(transits)
+        assert app.selected is not None
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_delete_person(app):
+    """select a person, press d -> files gone, table empty."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        # select via real key flow, then delete with 'd'
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert list(app_module.people_dir().glob("*.chart")) == []
+        assert app.query_one("#people-table").row_count == 0
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_refresh_reloads_current_person(app):
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        # select via real key flow
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        natal_before = app.query_one("#natal-out").content
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.query_one("#natal-out").content == natal_before
+        await pilot.press("q")
