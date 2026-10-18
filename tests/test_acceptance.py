@@ -162,6 +162,56 @@ async def test_journey_select_person_shows_natal_aspects_transits(app):
 
 
 @pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_mouse_click_selects_person(app):
+    """the real bug john hit: clicking a row posts CellSelected, not
+    RowSelected — without that handler nothing ever displayed."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        # click inside the table widget near the top (row 0; y=0 is the header)
+        await pilot.click("#people-table", offset=(4, 1))
+        await pilot.pause()
+        assert app.selected is not None, "click did not select the person"
+        natal = app.query_one("#natal-out").content
+        assert "Test" in str(natal)
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_synastry_partner(app):
+    """select A, arrow to B, press s -> synastry pane fills with A <-> B."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app, name="Alpha")
+        await seed_person(app, name="Beta")
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")        # select Alpha (row 0)
+        await pilot.pause()
+        assert app.selected.name == "Alpha"
+        await pilot.press("down")         # cursor to Beta (row 1)
+        await pilot.press("s")            # synastry Alpha <-> Beta
+        await pilot.pause()
+        syn = app.query_one("#synastry-out").content
+        assert "Alpha <-> Beta" in str(syn)
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_synastry_needs_two_people(app):
+    """synastry of a person with themselves warns instead of crashing."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app, name="Solo")
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("s")            # cursor still on Solo -> warning
+        await pilot.pause()
+        # no crash, synastry pane untouched
+        assert str(app.query_one("#synastry-out").content) == ""
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
 async def test_journey_delete_person(app):
     """select a person, press d -> files gone, table empty."""
     async with app.run_test(size=(120, 40)) as pilot:

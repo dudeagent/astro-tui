@@ -117,6 +117,7 @@ class AstroApp(App):
     BINDINGS = [
         Binding("n", "new_person", "add person"),
         Binding("d", "delete_person", "delete person"),
+        Binding("s", "synastry_partner", "synastry partner"),
         Binding("r", "refresh", "refresh"),
         Binding("q", "quit", "quit"),
     ]
@@ -164,14 +165,23 @@ class AstroApp(App):
         for p in self.people:
             table.add_row(p.name, f"{p.month}/{p.day}/{p.year}", key=str(p.path))
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if not event.row_key or event.row_key.value is None:
-            return
-        path = Path(event.row_key.value)
+    def _select_from_key(self, key) -> None:
+        path = Path(key)
         person = next((p for p in self.people if p.path == path), None)
         if person:
             self.selected = person
             self.show_person(person)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        # enter / keyboard selection
+        if event.row_key and event.row_key.value is not None:
+            self._select_from_key(event.row_key.value)
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        # a mouse click posts CellSelected (even with cursor_type="row"),
+        # so without this handler clicking a person row did nothing.
+        if event.row_key and event.row_key.value is not None:
+            self._select_from_key(event.row_key.value)
 
     def show_person(self, person: astrolog.Person) -> None:
         try:
@@ -183,7 +193,34 @@ class AstroApp(App):
             self.query_one("#transits-out", Static).update(
                 "now (sorted by influence):\n" +
                 render_aspects(astrolog.transits_today(person.path)))
-            self.set_focus(None)
+            # keep focus on the table so the user can arrow to another row
+            # (e.g. to pick a synastry partner with 's') without re-clicking
+        except astrolog.AstrologError as e:
+            self.notify(str(e), severity="error")
+
+    def action_synastry_partner(self) -> None:
+        """with the cursor on a row: compute synastry selected <-> that person."""
+        if not self.selected:
+            self.notify("pick a person first (enter or click)", severity="warning")
+            return
+        table = self.query_one("#people-table", DataTable)
+        from textual.coordinate import Coordinate
+        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
+        if not key or key.value is None:
+            return
+        partner = next((p for p in self.people if p.path == Path(key.value)), None)
+        if partner is None:
+            return
+        if partner.path == self.selected.path:
+            self.notify("synastry needs two different people", severity="warning")
+            return
+        try:
+            text = astrolog.synastry_aspects(self.selected.path, partner.path)
+            self.query_one("#synastry-out", Static).update(
+                f"{self.selected.name} <-> {partner.name} "
+                f"(sorted by power):\n" +
+                render_aspects(text))
+            self.notify(f"synastry: {self.selected.name} x {partner.name}")
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")
 
