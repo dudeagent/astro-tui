@@ -8,6 +8,11 @@ from pathlib import Path
 
 ASTROLOG = os.environ.get("ASTROLOG_BIN", "astrolog")
 
+# a transit is "powerful" when our estimated power score (0..1, see
+# TransitEvent.power) clears this bar. sane default: Saturn conj (~0.7),
+# Pluto square (~0.7) and Uranus trine (~0.64) flag; Moon trine (~0.24) doesn't.
+POWERFUL_THRESHOLD = float(os.environ.get("ASTRO_TUI_POWERFUL_THRESHOLD", "0.5"))
+
 # person metadata lives next to the .chart file as json so the tui
 # can rebuild forms without re-parsing astrolog's file format
 import json
@@ -145,6 +150,30 @@ class TransitEvent:
     natal_sign: str
     natal_body: str
 
+    # astrolog doesn't emit a power value with -t output, so we estimate one
+    # using the same ingredients its -a power model uses: aspect kind (conj
+    # and opposition are strongest, trine/square next, minor aspects weak)
+    # times the transiting body's "weight" (outer planets > sun/moon).
+    _ASPECT_WEIGHT = {"Con": 1.0, "Opp": 0.9, "Tri": 0.8, "Squ": 0.7,
+                      "Sex": 0.4, "Ses": 0.3, "Sem": 0.3, "Qui": 0.2,
+                      "Inc": 0.2, "Qun": 0.2, "Qin": 0.2, "Ntv": 0.1,
+                      "Wax": 0.3, "Wan": 0.3}
+    _BODY_WEIGHT = {"Plu": 1.0, "Nep": 0.9, "Ura": 0.8, "Sat": 0.7,
+                    "Jup": 0.6, "Mar": 0.4, "Sun": 0.5, "Moo": 0.3,
+                    "Nor": 0.2, "Chi": 0.2}
+
+    @property
+    def power(self) -> float:
+        """rough 0..1 power score for this transit hit (higher = stronger)."""
+        kind = self.kind[:3].capitalize()
+        body = self.body[:3].capitalize()
+        return self._BODY_WEIGHT.get(body, 0.1) * self._ASPECT_WEIGHT.get(kind, 0.1)
+
+    @property
+    def powerful(self) -> bool:
+        """true if this transit scores above the POWERFUL_THRESHOLD."""
+        return self.power >= POWERFUL_THRESHOLD
+
     @property
     def label(self) -> str:
         return f"{self.body} {self.kind} natal {self.natal_body}"
@@ -250,6 +279,22 @@ def transits_month(chart: Path, month: int, year: int) -> str:
 def transits_events_month(chart: Path, month: int, year: int) -> list[TransitEvent]:
     """exact-time transit hits for a month, parsed and sorted chronologically."""
     return parse_transit_events(transits_month(chart, month, year))
+
+
+def transits_events_next_months(chart: Path, month: int, year: int,
+                                months: int = 3) -> list[TransitEvent]:
+    """exact-time transit hits for the next `months` months starting at
+    (month, year), collected and sorted chronologically. used by the
+    transits tab so powerful upcoming transits are visible ahead of time."""
+    out: list[TransitEvent] = []
+    m, y = month, year
+    for _ in range(months):
+        out.extend(transits_events_month(chart, m, y))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return sorted(out, key=lambda e: e.sort_key)
 
 
 def synastry_grid(c1: Path, c2: Path) -> str:

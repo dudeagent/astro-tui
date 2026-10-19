@@ -20,8 +20,11 @@ from tests.test_acceptance import HAS_ASTROLOG, app, seed_person  # noqa: E402,F
 
 
 def test_transits_are_parsed_once_not_twice(app):
-    """selecting a person parses transit events exactly once and populates
-    the transit DataTable."""
+    """selecting a person parses each month's transit output exactly once and
+    populates the transit DataTable. the transit tab scans a window of
+    months (transits_events_next_months), so that's one parse call per
+    month in the window — 3 by default. the original regression (parsed
+    data being fed back into a parser) would double this to 6+ calls."""
     if not HAS_ASTROLOG:
         return
     calls = []
@@ -48,7 +51,10 @@ def test_transits_are_parsed_once_not_twice(app):
         person, transit_table = asyncio.run(run())
 
     assert transit_table.row_count > 0
-    assert len(calls) == 1, (
-        f"expected exactly one parse_transit_events call, got {len(calls)}")
+    # one parse per month in the scan window (3 = transits_events_next_months
+    # default); the old double-parse bug would show up as 6+ calls
+    assert len(calls) == 3, (
+        f"expected exactly one parse_transit_events call per month (3), "
+        f"got {len(calls)}")
     assert all(isinstance(t, str) for t in calls)
     assert person.path.exists()

@@ -58,6 +58,77 @@ class TestTransitEventParser(unittest.TestCase):
         self.assertEqual(astrolog.parse_transit_events("garbage"), [])
 
 
+class TestTransitEventPower(unittest.TestCase):
+    """the estimated power scoring + powerful threshold behavior."""
+
+    def _make_event(self, body: str, kind: str):
+        return astrolog.TransitEvent(
+            date="10/1/2026", time="1:00pm", body=body, body_sign="Cap",
+            kind=kind, natal_sign="Can", natal_body="Sun")
+
+    def test_power_ranks_major_aspects_higher(self):
+        # conj/opposition weigh more than sextile for the same planet
+        self.assertGreater(self._make_event("Pluto", "Con").power,
+                           self._make_event("Pluto", "Sex").power)
+        self.assertGreater(self._make_event("Saturn", "Opp").power,
+                           self._make_event("Saturn", "Ses").power)
+
+    def test_power_ranks_outer_planets_higher(self):
+        # outer planets beat personal points for the same aspect kind
+        self.assertGreater(self._make_event("Pluto", "Tri").power,
+                           self._make_event("Moon", "Tri").power)
+        self.assertGreater(self._make_event("Saturn", "Squ").power,
+                           self._make_event("Mercury", "Squ").power)
+
+    def test_powerful_threshold_boundary(self):
+        # pluto conj (1.0) and saturn conj (0.7) clear the 0.5 threshold
+        self.assertTrue(self._make_event("Pluto", "Con").powerful)
+        self.assertTrue(self._make_event("Saturn", "Con").powerful)
+        # saturn sextile (0.7 * 0.4 = 0.28) doesn't
+        self.assertFalse(self._make_event("Saturn", "Sex").powerful)
+        # uranus trine (0.8 * 0.8 = 0.64) does; moon trine (0.24) doesn't
+        self.assertTrue(self._make_event("Uranus", "Tri").powerful)
+        self.assertFalse(self._make_event("Moon", "Tri").powerful)
+
+    def test_unknown_bodies_score_low(self):
+        # bodies without a weight entry (asteroids etc) get the floor
+        self.assertEqual(self._make_event("Vesta", "Con").power, 0.1)
+        self.assertFalse(self._make_event("Vesta", "Con").powerful)
+
+
+class TestTransitsNextMonths(unittest.TestCase):
+    """transits_events_next_months collects a window of months, sorted."""
+
+    def test_collects_and_sorts_across_months(self):
+        oct_ev = astrolog.TransitEvent(
+            date="10/15/2026", time="5:00pm", body="Mars",
+            body_sign="Sco", kind="Tri", natal_sign="Pis", natal_body="Sun")
+        nov_ev = astrolog.TransitEvent(
+            date="11/2/2026", time="9:00am", body="Jupiter",
+            body_sign="Can", kind="Opp", natal_sign="Cap", natal_body="MC")
+        by_month = {(10, 2026): [oct_ev], (11, 2026): [nov_ev]}
+        with mock.patch.object(
+                astrolog, "transits_events_month",
+                side_effect=lambda chart, m, y: by_month.get((m, y), [])):
+            got = astrolog.transits_events_next_months(
+                mock.Mock(), 10, 2026, months=2)
+        # chronological across the month boundary
+        self.assertEqual(got, [oct_ev, nov_ev])
+
+    def test_rolls_over_the_year(self):
+        called = []
+
+        def fake_month(chart, m, y):
+            called.append((m, y))
+            return []
+
+        with mock.patch.object(astrolog, "transits_events_month",
+                               side_effect=fake_month):
+            astrolog.transits_events_next_months(
+                mock.Mock(), 11, 2026, months=3)
+        self.assertEqual(called, [(11, 2026), (12, 2026), (1, 2027)])
+
+
 class TestAppTransitTab(unittest.TestCase):
     """the app's transit-tab population + selection logic, exercised directly."""
 
@@ -72,21 +143,38 @@ class TestAppTransitTab(unittest.TestCase):
         return self.app_module.astrolog.parse_transit_events(SAMPLE_MONTH)
 
     def test_load_transit_events_populates_table(self):
+        # the app asks for a window of upcoming months (not just the current
+        # one) so powerful upcoming transits are visible ahead of time
         events = self._make_events()
+        # synthetic high-power event to verify the 🔺 flag lands on it
+        powerful = self.app_module.astrolog.TransitEvent(
+            date="11/1/2026", time="8:00am", body="Pluto", body_sign="Cap",
+            kind="Squ", natal_sign="Can", natal_body="Sun")
+        all_events = events + [powerful]
         app = self.app_module.AstroApp()
         table = mock.MagicMock()
         app.query_one = mock.MagicMock(return_value=table)
-        with mock.patch.object(self.app_module.astrolog, "transits_events_month",
-                               return_value=events):
+        with mock.patch.object(self.app_module.astrolog,
+                               "transits_events_next_months",
+                               return_value=all_events):
             app.load_transit_events(mock.Mock())
-        self.assertEqual(table.add_row.call_count, len(events))
-        # first row: date, time, label, key
+        self.assertEqual(table.add_row.call_count, len(all_events))
+        # the new power column sits alongside the existing ones
+        # (DataTable.add_columns(*cols) receives them as positional args)
+        self.assertEqual(table.add_columns.call_args_list[0][0],
+                         ("date", "time", "transit", "power"))
+        # first row: date, time, label, power flag (no flag for weak transits)
         first = table.add_row.call_args_list[0][0]
         self.assertEqual(first[0], "10/2/2026")
         self.assertEqual(first[1], "2:47pm")
         self.assertEqual(first[2], "Mercury Sex natal Midheaven")
+        self.assertEqual(first[3], "")
         # key is passed as a keyword arg to DataTable.add_row
         self.assertEqual(table.add_row.call_args_list[0].kwargs["key"], "0")
+        # the high-power event gets the 🔺 flag in its power column
+        last = table.add_row.call_args_list[-1][0]
+        self.assertEqual(last[0], "11/1/2026")
+        self.assertEqual(last[3], "🔺")
 
     def test_show_transit_detail_renders_exact_hit(self):
         events = self._make_events()

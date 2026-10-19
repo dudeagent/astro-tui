@@ -280,18 +280,23 @@ class AstroApp(App):
             self.notify(str(e), severity="error")
 
     def load_transit_events(self, person: astrolog.Person) -> None:
-        """populate the transits tab: exact-time hits for the current month."""
+        """populate the transits tab: exact-time hits for a window of upcoming
+        months. the power column flags transits scoring above
+        POWERFUL_THRESHOLD with a 🔺 (see astrolog.py for the scoring)."""
         today = datetime.date.today()
         table = self.query_one("#transit-table", DataTable)
         table.clear(columns=True)
-        table.add_columns("date", "time", "transit")
+        table.add_columns("date", "time", "transit", "power")
         table.cursor_type = "row"
-        self.transit_events = astrolog.transits_events_month(
+        self.transit_events = astrolog.transits_events_next_months(
             person.path, today.month, today.year)
         for i, ev in enumerate(self.transit_events):
-            table.add_row(ev.date, ev.time, ev.label, key=str(i))
+            flag = "🔺" if ev.powerful else ""
+            table.add_row(ev.date, ev.time, ev.label, flag, key=str(i))
+        n_flagged = sum(1 for ev in self.transit_events if ev.powerful)
         self.query_one("#transit-detail", Static).update(
-            "this month's exact transits — enter/click one for details")
+            f"upcoming transits — enter/click one for details "
+            f"({n_flagged} powerful 🔺)")
 
     def show_transit_detail(self, key) -> None:
         if key is None or key.value is None:
