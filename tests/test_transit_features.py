@@ -1,5 +1,6 @@
 """tests for the new wheel + selectable-transits features (feature/wheel-and-transits)."""
 
+import datetime
 import shutil
 import sys
 import unittest
@@ -156,7 +157,9 @@ class TestAppTransitTab(unittest.TestCase):
         app.query_one = mock.MagicMock(return_value=table)
         with mock.patch.object(self.app_module.astrolog,
                                "transits_events_next_months",
-                               return_value=all_events):
+                               return_value=all_events), \
+                mock.patch.object(self.app_module.astrolog,
+                                  "transits_graph", return_value={}):
             app.load_transit_events(mock.Mock())
         self.assertEqual(table.add_row.call_count, len(all_events))
         # the new power column sits alongside the existing ones
@@ -195,6 +198,68 @@ class TestAppTransitTab(unittest.TestCase):
         app.show_transit_detail(mock.Mock(value="999"))
         self.assertTrue(app.notify.called)
         self.assertFalse(app.query_one().update.called)
+
+    def test_load_transit_events_loads_graphs_for_full_window(self):
+        # the app must fetch a -V power graph for every month in the
+        # transit window (current + 2), not just the current month,
+        # so events in future months get their graph in the detail view
+        app = self.app_module.AstroApp()
+        app.query_one = mock.MagicMock()
+        fake_graph = {"Sun Con Sun": [9] * 31}
+        called = []
+
+        def fake_graph_call(chart, m, y):
+            called.append((m, y))
+            return fake_graph
+
+        # create the real date object BEFORE the mock (patching datetime.date
+        # on the app module patches the shared datetime module, so a real
+        # date must be built outside the with block)
+        today = datetime.date(2026, 11, 18)
+        with mock.patch.object(self.app_module.datetime, "date") as d, \
+                mock.patch.object(self.app_module.astrolog,
+                                  "transits_events_next_months",
+                                  return_value=[]), \
+                mock.patch.object(self.app_module.astrolog,
+                                  "transits_graph",
+                                  side_effect=fake_graph_call):
+            d.today.return_value = today
+            app.load_transit_events(mock.Mock())
+        # window: current month + next two, with year rollover
+        self.assertEqual(called, [(11, 2026), (12, 2026), (1, 2027)])
+        self.assertEqual(app.transit_graphs["2026-11"], fake_graph)
+        self.assertEqual(app.transit_graphs["2026-12"], fake_graph)
+        self.assertEqual(app.transit_graphs["2027-01"], fake_graph)
+
+    def test_show_transit_detail_uses_event_month_graph(self):
+        # the detail view must look up the -V graph by the event's month,
+        # not always the current month (events span the 3-month window)
+        app = self.app_module.AstroApp()
+        app.transit_events = self._make_events()  # all events dated 10/2026
+        app.query_one = mock.MagicMock()
+        fake_graph = {"Sun Sex Mar": [None, None, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, None, None]}
+        app.transit_graphs = {"2026-10": fake_graph,
+                              "2026-11": {"Sun Sex Mar": [None] * 31}}
+        # select the third event: Sun (Lib) Sex natal (Sag) Mars, day 3
+        app.show_transit_detail(mock.Mock(value="1"))
+        text = app.query_one().update.call_args[0][0]
+        self.assertIn("power score", text)
+        self.assertIn("power graph (this month):", text)
+        # the sparkline renders a block at the exact-hit day (day 3)
+        sparkline_line = next(l for l in text.split("\n")
+                              if "power graph" in l)
+        self.assertIn("█", sparkline_line)  # peak value 9 (day 3) -> full block
+        self.assertIn("▂", sparkline_line)  # mid values render too
+
+    def test_show_transit_detail_missing_graph_row(self):
+        app = self.app_module.AstroApp()
+        app.transit_events = self._make_events()
+        app.query_one = mock.MagicMock()
+        # graph exists but has no row matching this transit
+        app.transit_graphs = {"2026-10": {"Unrelated Row": [None] * 31}}
+        app.show_transit_detail(mock.Mock(value="0"))
+        text = app.query_one().update.call_args[0][0]
+        self.assertIn("(no monthly power graph row for this transit)", text)
 
 
 class TestLiveAstrologMonthRoundTrip(unittest.TestCase):

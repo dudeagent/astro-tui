@@ -222,7 +222,7 @@ async def test_journey_mouse_click_selects_person(app):
 
 @pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
 async def test_journey_synastry_partner(app):
-    """select A, arrow to B, press s -> synastry pane fills with A <-> B."""
+    """select A, press s, pick B from the dropdown -> synastry pane fills with A <-> B."""
     async with app.run_test(size=(120, 40)) as pilot:
         await seed_person(app, name="Alpha")
         await seed_person(app, name="Beta")
@@ -231,8 +231,10 @@ async def test_journey_synastry_partner(app):
         await pilot.press("enter")        # select Alpha (row 0)
         await pilot.pause()
         assert app.selected.name == "Alpha"
-        await pilot.press("down")         # cursor to Beta (row 1)
-        await pilot.press("s")            # synastry Alpha <-> Beta
+        await pilot.press("s")            # focus the synastry dropdown
+        await pilot.press("enter")        # open the dropdown overlay
+        await pilot.press("down")         # highlight Beta
+        await pilot.press("enter")        # select Beta
         await pilot.pause()
         syn = app.query_one("#synastry-out").content
         assert "Alpha <-> Beta" in str(syn)

@@ -1,8 +1,11 @@
 """wrapper around the astrolog cli: run it, write chart files, parse output."""
 
+import json
 import os
 import re
+import struct
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,10 +15,6 @@ ASTROLOG = os.environ.get("ASTROLOG_BIN", "astrolog")
 # TransitEvent.power) clears this bar. sane default: Saturn conj (~0.7),
 # Pluto square (~0.7) and Uranus trine (~0.64) flag; Moon trine (~0.24) doesn't.
 POWERFUL_THRESHOLD = float(os.environ.get("ASTRO_TUI_POWERFUL_THRESHOLD", "0.5"))
-
-# person metadata lives next to the .chart file as json so the tui
-# can rebuild forms without re-parsing astrolog's file format
-import json
 
 SIGNS = ["Ari", "Tau", "Gem", "Can", "Leo", "Vir",
          "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis"]
@@ -82,6 +81,7 @@ def parse_chart_header(path: Path) -> Person:
     meta = path.with_suffix(".json")
     if meta.exists():
         d = json.loads(meta.read_text())
+        d.pop("path", None)  # a stray "path" key in json would collide with path=path below
         # BUGFIX: was `Person(path=d, **d)` — the json dict itself was
         # passed as path, so every form-saved person loaded with a dict
         # as .path, the table row key was str(dict), and selection
@@ -303,6 +303,115 @@ def synastry_grid(c1: Path, c2: Path) -> str:
 
 def synastry_aspects(c1: Path, c2: Path) -> str:
     return run(["-r0", str(c1), str(c2), "-a"])
+
+
+def wheel_bitmap(chart: Path, partner: Path | None = None,
+                 tmp_dir: Path | None = None) -> bytes:
+    """astrolog's graphic wheel as BMP bytes. with a partner chart it
+    draws the synastry overlay (-r0 file1 file2 -w).
+
+    arg order matters: -r0 <f1> <f2> must come before -Xb0/-Xo, or astrolog
+    tries to open the switches as chart files.
+    """
+    if tmp_dir is None:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="astro-tui-"))
+    out = tmp_dir / "wheel.bmp"
+    args = (["-r0", str(chart), str(partner)] if partner
+            else ["-i", str(chart)])
+    run(args + ["-Xb0", "-Xo", str(out), "-w"])
+    data = out.read_bytes()
+    out.unlink(missing_ok=True)
+    return data
+
+
+def parse_bmp(data: bytes) -> tuple[list[list[tuple[int, int, int]]], int, int]:
+    """parse a 24-bit uncompressed Windows BMP into RGB rows + width/height.
+    BMP rows are bottom-up and padded to 4-byte boundaries."""
+    if data[:2] != b"BM":
+        raise ValueError("not a BMP file")
+    offset = struct.unpack_from("<I", data, 10)[0]
+    width, height = struct.unpack_from("<ii", data, 18)
+    bpp = struct.unpack_from("<H", data, 28)[0]
+    if bpp != 24:
+        raise ValueError(f"only 24-bit BMPs supported, got {bpp}bpp")
+    row_size = ((width * 3 + 3) // 4) * 4
+    rows: list[list[tuple[int, int, int]]] = []
+    for y in range(abs(height)):
+        start = offset + y * row_size
+        row = [tuple(data[start + x * 3:start + x * 3 + 3][::-1])
+               for x in range(width)]
+        rows.append(row)  # bottom-up; caller indexes by source row
+    if height > 0:
+        rows.reverse()  # top-down
+    return rows, width, abs(height)
+
+
+def render_bmp_ansi(data: bytes, cols: int = 44, rows: int = 24) -> str:
+    """render a 24-bit BMP as an ANSI-colored unicode-halfblock string.
+
+    nearest-neighbor downsample to cols x 2*rows pixels, then each output
+    row emits one '▀' char whose fg = top pixel and bg = bottom pixel —
+    double vertical resolution without any image dependency.
+    """
+    px, w, h = parse_bmp(data)
+    out = []
+    for r in range(rows):
+        sy0 = min(h - 1, r * h // rows)
+        sy1 = min(h - 1, (2 * r + 1) * h // (2 * rows))
+        line = []
+        for c in range(cols):
+            sx = min(w - 1, c * w // cols)
+            top = px[sy0][sx]
+            bot = px[sy1][sx]
+            line.append(f"\x1b[38;2;{top[0]};{top[1]};{top[2]};48;2;"
+                        f"{bot[0]};{bot[1]};{bot[2]}m▀")
+        out.append("".join(line) + "\x1b[0m")
+    return "\n".join(out)
+
+
+def transits_graph(chart: Path, month: int, year: int) -> dict[str, list[int | None]]:
+    """parse astrolog's -V <month> <year> monthly transit-power graph.
+
+    each row is 'T.Body Kind N.Body' followed by 2 chars per day of the
+    month (a digit pair like '55' = power 5 for that day; '|' and spaces
+    mean the transit is out of orb that day -> None). returns a dict of
+    label -> per-day values, e.g. {"Sun Opp Moo": [None, ...]}.
+    """
+    text = run(["-i", str(chart), "-V", str(month), str(year)])
+    out: dict[str, list[int | None]] = {}
+    for line in text.splitlines():
+        m = re.match(r"^T\.(\w+)\s+(\w+)\s+N\.(\w+)\s*(.*)$", line)
+        if not m:
+            continue
+        label = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+        raw = m.group(4)
+        values: list[int | None] = []
+        i = 0
+        while i < len(raw):
+            chunk = raw[i:i + 2]
+            if chunk[0].isdigit():
+                values.append(int(chunk[0]))
+            elif chunk[0] == "|":
+                values.append(None)
+                i += 2
+                # resync: skip whitespace pairs after the divider
+                while i + 1 < len(raw) and raw[i:i + 2].isspace():
+                    values.append(None)
+                    i += 2
+                continue
+            else:
+                values.append(None)
+            i += 2
+        out[label] = values
+    return out
+
+
+def find_graph_row(graph: dict[str, list[int | None]],
+                   ev: "TransitEvent") -> list[int | None] | None:
+    """locate the -V graph row matching a transit event (T-body kind
+    natal-body, abbreviated to 3 letters like astrolog does)."""
+    key = f"{ev.body[:3]} {ev.kind[:3]} {ev.natal_body[:3]}"
+    return graph.get(key)
 
 
 def interpretations() -> str:

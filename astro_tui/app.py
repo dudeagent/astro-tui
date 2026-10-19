@@ -7,11 +7,12 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, Footer, Header, Input, Label, ListView, ListItem, Static
+from textual.widgets import Button, Footer, Header, Input, Label, ListView, ListItem, Select, Static
 from textual.widgets import DataTable, TabbedContent, TabPane
 
 from . import astrolog, geo, lore
@@ -39,6 +40,12 @@ def render_aspects(text: str) -> str:
     for a in astrolog.parse_aspects(text):
         lines.append(f"{a.n:>3}. {a.body1:<8} ({a.sign1}) {a.kind:<4} ({a.sign2}) {a.body2:<8}  orb {a.orb:<8} power {a.power}")
     return "\n".join(lines) or text
+
+
+def _sparkline(values: list[int | None]) -> str:
+    """render a -V power row (values 0-9 or None) as unicode blocks."""
+    blocks = " ▁▂▃▄▅▆▇█"
+    return "".join("·" if v is None else blocks[min(v, 8)] for v in values)
 
 
 class PersonForm(Static):
@@ -196,6 +203,7 @@ class AstroApp(App):
         self.people: list[astrolog.Person] = []
         self.selected: astrolog.Person | None = None
         self.transit_events: list[astrolog.TransitEvent] = []
+        self.transit_graphs: dict[str, list[int | None]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -205,17 +213,25 @@ class AstroApp(App):
                 yield DataTable(id="people-table")
             with TabbedContent(id="content", initial="tab-natal"):
                 with TabPane("natal", id="tab-natal"):
-                    yield Static("pick a person", classes="pre", id="natal-out")
+                    with VerticalScroll():
+                        yield Static("pick a person", classes="pre", id="natal-out")
+                        yield Static("", classes="pre", id="natal-wheel")
                 with TabPane("aspects", id="tab-aspects"):
-                    yield Static("", classes="pre", id="aspects-out")
+                    with VerticalScroll():
+                        yield Static("", classes="pre", id="aspects-out")
+                        yield Static("", classes="pre", id="aspects-wheel")
                 with TabPane("transits", id="tab-transits"):
-                    with Vertical():
+                    with VerticalScroll():
                         yield DataTable(id="transit-table")
                         yield Static("", classes="pre", id="transit-detail")
+                        yield Static("", classes="pre", id="transit-wheel")
                 with TabPane("wheel", id="tab-wheel"):
                     yield Static("", classes="pre", id="wheel-out")
                 with TabPane("synastry", id="tab-synastry"):
-                    yield Static("", classes="pre", id="synastry-out")
+                    with VerticalScroll():
+                        yield Select([("choose partner...", None)], id="synastry-partner", allow_blank=True)
+                        yield Static("", classes="pre", id="synastry-out")
+                        yield Static("", classes="pre", id="synastry-wheel")
                 with TabPane("lore", id="tab-lore"):
                     with VerticalScroll():
                         yield Static(lore_text(), classes="pre", id="lore-out")
@@ -250,20 +266,33 @@ class AstroApp(App):
             self.notify(f"no person for row {key!r}", severity="error")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        # enter / keyboard selection — only the people table selects people;
-        # the transit table posts the same events and is handled separately
-        if event.data_table.id != "people-table":
-            return
-        if event.row_key and event.row_key.value is not None:
-            self._select_from_key(event.row_key.value)
+        # enter / keyboard selection — dispatch by table id (textual dispatches
+        # these messages by widget class, so both tables land here)
+        if event.data_table.id == "people-table":
+            if event.row_key and event.row_key.value is not None:
+                self._select_from_key(event.row_key.value)
+        elif event.data_table.id == "transit-table":
+            self.show_transit_detail(event.row_key)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
-        # a mouse click posts CellSelected (even with cursor_type="row"),
-        # so without this handler clicking a person row did nothing.
-        if event.data_table.id != "people-table":
-            return
-        if event.row_key and event.row_key.value is not None:
-            self._select_from_key(event.row_key.value)
+        # a mouse click posts CellSelected (even with cursor_type="row") —
+        # dispatch by table id the same way as RowSelected.
+        if event.data_table.id == "people-table":
+            if event.row_key and event.row_key.value is not None:
+                self._select_from_key(event.row_key.value)
+        elif event.data_table.id == "transit-table":
+            self.show_transit_detail(event.row_key)
+
+    def _wheel_image(self, person: astrolog.Person,
+                     partner: astrolog.Person | None = None) -> Text:
+        """astrolog's graphic wheel for this person (and optional synastry
+        partner) as an ANSI-colored halfblock image."""
+        try:
+            bmp = astrolog.wheel_bitmap(person.path,
+                                        partner.path if partner else None)
+            return Text.from_ansi(astrolog.render_bmp_ansi(bmp))
+        except (astrolog.AstrologError, ValueError) as e:
+            return Text(f"wheel render failed: {e}")
 
     def show_person(self, person: astrolog.Person) -> None:
         try:
@@ -273,9 +302,48 @@ class AstroApp(App):
             self.query_one("#aspects-out", Static).update(
                 render_aspects(astrolog.natal_aspects(person.path)))
             self.query_one("#wheel-out", Static).update(astrolog.wheel(person.path))
+            # graphic wheel on every chart screen (natal/aspects/transits);
+            # synastry gets the overlay image once a partner is picked
+            img = self._wheel_image(person)
+            for wid in ("natal-wheel", "aspects-wheel", "transit-wheel"):
+                self.query_one(f"#{wid}", Static).update(img)
             self.load_transit_events(person)
+            self.refresh_synastry_options(person)
             # keep focus on the table so the user can arrow to another row
             # (e.g. to pick a synastry partner with 's') without re-clicking
+        except astrolog.AstrologError as e:
+            self.notify(str(e), severity="error")
+
+    def refresh_synastry_options(self, person: astrolog.Person) -> None:
+        """(re)populate the synastry partner dropdown for the selected person."""
+        sel = self.query_one("#synastry-partner", Select)
+        sel.set_options(
+            [("choose partner...", None)] +
+            [(p.name, str(p.path)) for p in self.people
+             if p.path != person.path])
+        sel.value = None
+        self.query_one("#synastry-out", Static).update("")
+        self.query_one("#synastry-wheel", Static).update("")
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "synastry-partner" or event.value is None:
+            return
+        partner = next((p for p in self.people
+                        if str(p.path) == event.value), None)
+        if partner is None or self.selected is None:
+            return
+        self.show_synastry(self.selected, partner)
+
+    def show_synastry(self, person: astrolog.Person,
+                      partner: astrolog.Person) -> None:
+        try:
+            text = astrolog.synastry_aspects(person.path, partner.path)
+            self.query_one("#synastry-out", Static).update(
+                f"{person.name} <-> {partner.name} "
+                f"(sorted by power):\n" + render_aspects(text))
+            self.query_one("#synastry-wheel", Static).update(
+                self._wheel_image(person, partner))
+            self.notify(f"synastry: {person.name} x {partner.name}")
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")
 
@@ -294,6 +362,17 @@ class AstroApp(App):
             flag = "🔺" if ev.powerful else ""
             table.add_row(ev.date, ev.time, ev.label, flag, key=str(i))
         n_flagged = sum(1 for ev in self.transit_events if ev.powerful)
+        # grab astrolog's monthly power graphs (-V) for every month in the
+        # transit window so details can show the day-by-day power curve for
+        # events in future months too, without re-running on every select
+        self.transit_graphs = {}
+        m, y = today.month, today.year
+        for _ in range(3):
+            self.transit_graphs[f"{y}-{m:02d}"] = astrolog.transits_graph(
+                person.path, m, y)
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
         self.query_one("#transit-detail", Static).update(
             f"upcoming transits — enter/click one for details "
             f"({n_flagged} powerful 🔺)")
@@ -306,41 +385,32 @@ class AstroApp(App):
         except (ValueError, IndexError):
             self.notify(f"bad transit row {key.value!r}", severity="error")
             return
-        self.query_one("#transit-detail", Static).update(
-            f"{ev.body} ({ev.body_sign}) {ev.kind} natal {ev.natal_body} "
-            f"({ev.natal_sign})\nexact: {ev.date} at {ev.time}")
-
-    def on_transit_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        self.show_transit_detail(event.row_key)
-
-    def on_transit_table_cell_selected(self, event: DataTable.CellSelected) -> None:
-        self.show_transit_detail(event.row_key)
+        lines = [f"{ev.body} ({ev.body_sign}) {ev.kind} natal {ev.natal_body} "
+                 f"({ev.natal_sign})",
+                 f"exact: {ev.date} at {ev.time}",
+                 f"power score: {ev.power:.2f}"
+                 + ("  🔺 POWERFUL" if ev.powerful else "")]
+        # look up the -V power graph for the event's month
+        month, _, year = ev.date.split("/")
+        graph = self.transit_graphs.get(f"{int(year)}-{int(month):02d}")
+        row = astrolog.find_graph_row(graph, ev) if graph else None
+        if row:
+            lines.append("power graph (this month): " + _sparkline(row))
+            peak = max((i for i, v in enumerate(row) if v is not None),
+                       default=None)
+            if peak is not None:
+                lines.append(f"peaks day {peak + 1} at strength "
+                             f"{row[peak]}/9")
+        else:
+            lines.append("(no monthly power graph row for this transit)")
+        self.query_one("#transit-detail", Static).update("\n".join(lines))
 
     def action_synastry_partner(self) -> None:
-        """with the cursor on a row: compute synastry selected <-> that person."""
+        """jump to the synastry partner dropdown ('s' binding)."""
         if not self.selected:
             self.notify("pick a person first (enter or click)", severity="warning")
             return
-        table = self.query_one("#people-table", DataTable)
-        from textual.coordinate import Coordinate
-        key = table.coordinate_to_cell_key(Coordinate(table.cursor_row, 0)).row_key
-        if not key or key.value is None:
-            return
-        partner = next((p for p in self.people if p.path == Path(key.value)), None)
-        if partner is None:
-            return
-        if partner.path == self.selected.path:
-            self.notify("synastry needs two different people", severity="warning")
-            return
-        try:
-            text = astrolog.synastry_aspects(self.selected.path, partner.path)
-            self.query_one("#synastry-out", Static).update(
-                f"{self.selected.name} <-> {partner.name} "
-                f"(sorted by power):\n" +
-                render_aspects(text))
-            self.notify(f"synastry: {self.selected.name} x {partner.name}")
-        except astrolog.AstrologError as e:
-            self.notify(str(e), severity="error")
+        self.query_one("#synastry-partner", Select).focus()
 
     def action_new_person(self) -> None:
         form = self.query_one("#form", PersonForm)
