@@ -77,7 +77,11 @@ def parse_chart_header(path: Path) -> Person:
     meta = path.with_suffix(".json")
     if meta.exists():
         d = json.loads(meta.read_text())
-        return Person(path=d, **d)
+        # BUGFIX: was `Person(path=d, **d)` — the json dict itself was
+        # passed as path, so every form-saved person loaded with a dict
+        # as .path, the table row key was str(dict), and selection
+        # silently did nothing (john's "clicking does nothing" bug).
+        return Person(**d, path=path)
     text = path.read_text()
     m = re.search(r"-qb\s+(\w{3})\s+(\d+)\s+(\d+)\s+(\d+:\d+\w*)\s+(\w+)\s+(\S+)\s+(\S+)\s+(\S+)", text)
     name = city = ""

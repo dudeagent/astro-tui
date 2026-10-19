@@ -92,6 +92,49 @@ async def test_journey_add_person_via_form(app):
         # the chart on disk must round-trip back to the same metadata
         back = astrolog.parse_chart_header(saved)
         assert back.name == "John Doe" and back.year == 1990
+        # regression (the bug john kept hitting): a form-saved person has a
+        # json sidecar, so parse_chart_header takes the json branch. it used
+        # to return the dict as .path -> selection silently did nothing.
+        assert isinstance(back.path, Path), "json path must be the chart file"
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_select_form_saved_person_with_json_sidecar(app):
+    """regression: people saved via the add form get a .json sidecar, and the
+    json branch of parse_chart_header returned the dict as .path — so the row
+    key was str(dict), no handler ever matched, and click/enter both did
+    nothing. this is the journey john actually uses; the seeded-person tests
+    above skipped it because seed_person doesn't write a sidecar."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        person = astrolog.Person(name="Form John", city="Austin",
+                                 year=1990, month=5, day=15, time="7:00AM",
+                                 dst=0, zone="6W", lon="97W37", lat="30N28")
+        out = app_module.people_dir() / "form-john.chart"
+        astrolog.create_chart(person, out)
+        out.with_suffix(".json").write_text(json.dumps({
+            k: getattr(person, k) for k in
+            ("name", "city", "year", "month", "day", "time",
+             "dst", "zone", "lon", "lat")}))
+        app.load_people()
+        assert isinstance(app.people[0].path, Path)
+        # enter selects
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.selected is not None, "enter did not select json-sidecar person"
+        assert "Form John" in str(app.query_one("#natal-out").content)
+        assert "orb" in str(app.query_one("#aspects-out").content)
+        # and a fresh app instance selects the same person by mouse click
+        import tempfile
+        a2 = app_module.AstroApp()
+        async with a2.run_test(size=(120, 40)) as pilot2:
+            await pilot2.click("#people-table", offset=(4, 1))
+            await pilot2.pause()
+            assert a2.selected is not None, "click did not select json-sidecar person"
+            assert "Form John" in str(a2.query_one("#natal-out").content)
+            await pilot2.press("q")
         await pilot.press("q")
 
 
