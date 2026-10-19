@@ -1,11 +1,12 @@
-"""regression: transit display double-parse bug.
+"""regression: transit display must parse astrolog output exactly once.
 
-show_person() was passing parse_aspects() output (a list) back into
-render_aspects(), which calls parse_aspects() again — a list has no
-.splitlines(). 2026-10-18, found by the acceptance suite (john's add-person
-crash was unrelated but the same review prompted this deep pass).
+The original bug: show_person() passed parse_aspects() output (a list) back
+into render_aspects(), which re-parses it — a list has no .splitlines() and
+the whole transit tab crashed. The transit tab has since been rebuilt around
+parse_transit_events() + a DataTable, so the modern equivalent regression is:
+selecting a person must call parse_transit_events() exactly once and
+populate the transit table. 2026-10-18.
 """
-import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -19,27 +20,19 @@ from tests.test_acceptance import HAS_ASTROLOG, app, seed_person  # noqa: E402,F
 
 
 def test_transits_are_parsed_once_not_twice(app):
-    """feed a raw string through show_person and assert the transit pane
-    gets rendered text, and that render_aspects never receives a list."""
+    """selecting a person parses transit events exactly once and populates
+    the transit DataTable."""
     if not HAS_ASTROLOG:
         return
-    fake_transits = (
-        "  1: trans   Pluto (Aqu) Con natal [Aqu] Moon     - orb: 1:30' - power: 253.28\n"
-        "  2: trans  Neptune (Ari) Sex natal [Aqu] Moon     - orb: 0:53' - power: 147.17\n"
-    )
     calls = []
 
-    real_parse = astrolog.parse_aspects
+    real_parse = astrolog.parse_transit_events
 
     def spy_parse(text):
-        if isinstance(text, list):
-            raise AssertionError(
-                "render_aspects received a list — the double-parse bug is back")
         calls.append(text)
         return real_parse(text)
 
-    with patch.object(astrolog, "transits_today", return_value=fake_transits), \
-         patch.object(astrolog, "parse_aspects", side_effect=spy_parse):
+    with patch.object(astrolog, "parse_transit_events", side_effect=spy_parse):
         import asyncio
 
         async def run():
@@ -49,13 +42,13 @@ def test_transits_are_parsed_once_not_twice(app):
                 table.focus()
                 await pilot.press("enter")
                 await pilot.pause()
-                pane = app.query_one("#transits-out").content
-                return person, pane
+                transit_table = app.query_one("#transit-table")
+                return person, transit_table
 
-        person, pane = asyncio.run(run())
+        person, transit_table = asyncio.run(run())
 
-    assert "253.28" in str(pane)
-    assert "sorted by influence" in str(pane)
-    # one parse per render_aspects call, all with strings
+    assert transit_table.row_count > 0
+    assert len(calls) == 1, (
+        f"expected exactly one parse_transit_events call, got {len(calls)}")
     assert all(isinstance(t, str) for t in calls)
     assert person.path.exists()

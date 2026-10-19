@@ -1,5 +1,6 @@
 """terminal UI for astrolog: natal charts, transits, synastry, lore."""
 
+import datetime
 import json
 import os
 import shutil
@@ -194,6 +195,7 @@ class AstroApp(App):
         super().__init__()
         self.people: list[astrolog.Person] = []
         self.selected: astrolog.Person | None = None
+        self.transit_events: list[astrolog.TransitEvent] = []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -207,7 +209,11 @@ class AstroApp(App):
                 with TabPane("aspects", id="tab-aspects"):
                     yield Static("", classes="pre", id="aspects-out")
                 with TabPane("transits", id="tab-transits"):
-                    yield Static("", classes="pre", id="transits-out")
+                    with Vertical():
+                        yield DataTable(id="transit-table")
+                        yield Static("", classes="pre", id="transit-detail")
+                with TabPane("wheel", id="tab-wheel"):
+                    yield Static("", classes="pre", id="wheel-out")
                 with TabPane("synastry", id="tab-synastry"):
                     yield Static("", classes="pre", id="synastry-out")
                 with TabPane("lore", id="tab-lore"):
@@ -244,13 +250,18 @@ class AstroApp(App):
             self.notify(f"no person for row {key!r}", severity="error")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        # enter / keyboard selection
+        # enter / keyboard selection — only the people table selects people;
+        # the transit table posts the same events and is handled separately
+        if event.data_table.id != "people-table":
+            return
         if event.row_key and event.row_key.value is not None:
             self._select_from_key(event.row_key.value)
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         # a mouse click posts CellSelected (even with cursor_type="row"),
         # so without this handler clicking a person row did nothing.
+        if event.data_table.id != "people-table":
+            return
         if event.row_key and event.row_key.value is not None:
             self._select_from_key(event.row_key.value)
 
@@ -261,13 +272,44 @@ class AstroApp(App):
                 person.summary + "\n\n" + render_positions(natal))
             self.query_one("#aspects-out", Static).update(
                 render_aspects(astrolog.natal_aspects(person.path)))
-            self.query_one("#transits-out", Static).update(
-                "now (sorted by influence):\n" +
-                render_aspects(astrolog.transits_today(person.path)))
+            self.query_one("#wheel-out", Static).update(astrolog.wheel(person.path))
+            self.load_transit_events(person)
             # keep focus on the table so the user can arrow to another row
             # (e.g. to pick a synastry partner with 's') without re-clicking
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")
+
+    def load_transit_events(self, person: astrolog.Person) -> None:
+        """populate the transits tab: exact-time hits for the current month."""
+        today = datetime.date.today()
+        table = self.query_one("#transit-table", DataTable)
+        table.clear(columns=True)
+        table.add_columns("date", "time", "transit")
+        table.cursor_type = "row"
+        self.transit_events = astrolog.transits_events_month(
+            person.path, today.month, today.year)
+        for i, ev in enumerate(self.transit_events):
+            table.add_row(ev.date, ev.time, ev.label, key=str(i))
+        self.query_one("#transit-detail", Static).update(
+            "this month's exact transits — enter/click one for details")
+
+    def show_transit_detail(self, key) -> None:
+        if key is None or key.value is None:
+            return
+        try:
+            ev = self.transit_events[int(key.value)]
+        except (ValueError, IndexError):
+            self.notify(f"bad transit row {key.value!r}", severity="error")
+            return
+        self.query_one("#transit-detail", Static).update(
+            f"{ev.body} ({ev.body_sign}) {ev.kind} natal {ev.natal_body} "
+            f"({ev.natal_sign})\nexact: {ev.date} at {ev.time}")
+
+    def on_transit_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        self.show_transit_detail(event.row_key)
+
+    def on_transit_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        self.show_transit_detail(event.row_key)
 
     def action_synastry_partner(self) -> None:
         """with the cursor on a row: compute synastry selected <-> that person."""

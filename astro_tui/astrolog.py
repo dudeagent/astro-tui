@@ -133,6 +133,53 @@ class Transit(Aspect):
     pass
 
 
+@dataclass
+class TransitEvent:
+    """an exact-time transit hit from astrolog -t <month> <year> output."""
+
+    date: str
+    time: str
+    body: str
+    body_sign: str
+    kind: str
+    natal_sign: str
+    natal_body: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.body} {self.kind} natal {self.natal_body}"
+
+    @property
+    def sort_key(self) -> tuple:
+        m, d, y = (int(x) for x in self.date.split("/"))
+        # time is "H:MMam"/"H:MMpm" — split on the colon, not fixed-width slicing
+        hh_str, mm_str = self.time[:-2].split(":")
+        hh, mm = int(hh_str), int(mm_str)
+        if self.time.lower().endswith("pm") and hh != 12:
+            hh += 12
+        if self.time.lower().endswith("am") and hh == 12:
+            hh = 0
+        return (y, m, d, hh, mm)
+
+
+_RE_TRANSIT_EVENT = re.compile(
+    r"^(\d{1,2})/\s*(\d{1,2})/\s*(\d{4})\s+(\d{1,2}:\d{2}[ap]m)\s+trans\s+"
+    r"(\w+)\s+[\[(]?(\w{3})[\])]\s+(\w{3})\s+natal\s+[\[(]?(\w{3})[\])]\s+(.+)$")
+
+
+def parse_transit_events(text: str) -> list[TransitEvent]:
+    """parse the 'MM/DD/YYYY  h:mmam trans Body (Sig) Kind natal (Sig) Body' lines."""
+    out = []
+    for line in text.splitlines():
+        m = _RE_TRANSIT_EVENT.match(line)
+        if m:
+            out.append(TransitEvent(
+                date=f"{m.group(1)}/{m.group(2)}/{m.group(3)}",
+                time=m.group(4), body=m.group(5), body_sign=m.group(6),
+                kind=m.group(7), natal_sign=m.group(8), natal_body=m.group(9).strip()))
+    return sorted(out, key=lambda e: e.sort_key)
+
+
 _RE_POS = re.compile(
     r"^(\w{3,4})\s*:\s*(\d{1,2})([A-Za-z]{3})(\d{1,2})(\s+R)?.*?\[ *(\d+)(?:st|nd|rd|th) house\]")
 # unified aspect parser: handles natal (-a), transit (-Tn), and
@@ -198,6 +245,11 @@ def transits_today(chart: Path) -> str:
 
 def transits_month(chart: Path, month: int, year: int) -> str:
     return run(["-i", str(chart), "-t", str(month), str(year)])
+
+
+def transits_events_month(chart: Path, month: int, year: int) -> list[TransitEvent]:
+    """exact-time transit hits for a month, parsed and sorted chronologically."""
+    return parse_transit_events(transits_month(chart, month, year))
 
 
 def synastry_grid(c1: Path, c2: Path) -> str:
