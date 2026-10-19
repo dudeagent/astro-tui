@@ -239,6 +239,9 @@ class AstroApp(App):
         if person:
             self.selected = person
             self.show_person(person)
+        else:
+            # never fail silently again
+            self.notify(f"no person for row {key!r}", severity="error")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # enter / keyboard selection
