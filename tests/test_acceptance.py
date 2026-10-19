@@ -199,8 +199,8 @@ async def test_journey_select_person_shows_natal_aspects_transits(app):
         assert "Sun" in str(natal) and "house" in str(natal)
         aspects = app.query_one("#aspects-out").content
         assert "orb" in str(aspects) and "power" in str(aspects)
-        transits = app.query_one("#transits-out").content
-        assert "sorted by influence" in str(transits)
+        transit_table = app.query_one("#transit-table")
+        assert transit_table.row_count > 0
         assert app.selected is not None
         await pilot.press("q")
 
