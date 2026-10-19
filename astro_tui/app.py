@@ -14,6 +14,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Header, Input, Label, ListView, ListItem, Select, Static
 from textual.widgets import DataTable, TabbedContent, TabPane
+from textual.screen import ModalScreen
+from textual_image.widget import AutoRenderable as AutoImageRenderable
 
 from . import astrolog, geo, lore
 
@@ -56,6 +58,7 @@ class PersonForm(Static):
     def compose(self) -> ComposeResult:
         self.fields = {}
         self.picked_city: geo.City | None = None
+        self.person: astrolog.Person | None = None
         yield Input(placeholder="city search — type name, press enter", id="field-search")
         yield ListView(id="city-results")
         defaults = [
@@ -153,9 +156,15 @@ class PersonForm(Static):
             return
         slug = person.name.lower().replace(" ", "-") or "person"
         out = people_dir() / f"{slug}.chart"
+        # editing mode: overwriting the person's own file is fine, but a
+        # collision with a *different* person still gets blocked
+        is_edit = self.person is not None
         if out.exists():
-            self.app.notify(f"{slug} already exists", severity="warning")
-            return
+            if is_edit and self.person.path.resolve() == out.resolve():
+                pass  # same person, allow save
+            else:
+                self.app.notify(f"{slug} already exists", severity="warning")
+                return
         try:
             astrolog.create_chart(person, out)
         except astrolog.AstrologError as e:
@@ -165,18 +174,44 @@ class PersonForm(Static):
             k: getattr(person, k) for k in
             ("name", "city", "year", "month", "day", "time", "dst", "zone", "lon", "lat")
         }))
+        # if the name changed during an edit the slug changed too — clean up
+        # the old chart + json files so the person doesn't exist twice
+        if is_edit and self.person.path.resolve() != out.resolve():
+            self.person.path.unlink(missing_ok=True)
+            self.person.path.with_suffix(".json").unlink(missing_ok=True)
         self.app.notify(f"saved {slug}")
         self.app.load_people()
         self._hide()
 
     def _hide(self) -> None:
         self.picked_city = None
+        self.person = None
         self.query_one("#city-results", ListView).display = False
         self.remove_class("shown")
         self.app.query_one("#people-table").focus()
 
     def action_cancel(self) -> None:
         self._hide()
+
+    def populate(self, person: astrolog.Person) -> None:
+        """pre-fill the form fields for editing an existing person."""
+        self.person = person
+        data = {
+            "name": person.name, "city": person.city,
+            "month": str(person.month), "day": str(person.day),
+            "year": str(person.year), "time": person.time,
+            "dst": str(person.dst), "zone": person.zone,
+            "lon": person.lon, "lat": person.lat,
+        }
+        for key, value in data.items():
+            if key in self.fields:
+                self.fields[key].value = value
+
+    def start_edit(self, person: astrolog.Person) -> None:
+        """open the form in edit mode, pre-filled with the person's data."""
+        self.populate(person)
+        self.add_class("shown")
+        self.fields["name"].focus()
 
 
 class AstroApp(App):
@@ -193,6 +228,7 @@ class AstroApp(App):
     BINDINGS = [
         Binding("n", "new_person", "add person"),
         Binding("d", "delete_person", "delete person"),
+        Binding("e", "edit_person", "edit person"),
         Binding("s", "synastry_partner", "synastry partner"),
         Binding("r", "refresh", "refresh"),
         Binding("q", "quit", "quit"),
@@ -219,6 +255,7 @@ class AstroApp(App):
                 with TabPane("aspects", id="tab-aspects"):
                     with VerticalScroll():
                         yield Static("", classes="pre", id="aspects-out")
+                        yield Static("", classes="pre", id="aspects-grid")
                         yield Static("", classes="pre", id="aspects-wheel")
                 with TabPane("transits", id="tab-transits"):
                     with VerticalScroll():
@@ -284,14 +321,15 @@ class AstroApp(App):
             self.show_transit_detail(event.row_key)
 
     def _wheel_image(self, person: astrolog.Person,
-                     partner: astrolog.Person | None = None) -> Text:
-        """astrolog's graphic wheel for this person (and optional synastry
-        partner) as an ANSI-colored halfblock image."""
+                     partner: astrolog.Person | None = None):
+        """astrolog's graphic wheel as a textual-image renderable (PIL-backed,
+        so it uses the right display protocol for the terminal instead of the
+        hand-rolled halfblock rendering that produced the wonky squares)."""
         try:
-            bmp = astrolog.wheel_bitmap(person.path,
-                                        partner.path if partner else None)
-            return Text.from_ansi(astrolog.render_bmp_ansi(bmp))
-        except (astrolog.AstrologError, ValueError) as e:
+            img = astrolog.wheel_image(person.path,
+                                       partner.path if partner else None)
+            return AutoImageRenderable(img)
+        except Exception as e:
             return Text(f"wheel render failed: {e}")
 
     def show_person(self, person: astrolog.Person) -> None:
@@ -301,6 +339,10 @@ class AstroApp(App):
                 person.summary + "\n\n" + render_positions(natal))
             self.query_one("#aspects-out", Static).update(
                 render_aspects(astrolog.natal_aspects(person.path)))
+            # astrolog's own matrix view of every body pair (-g) — the
+            # "better table of aspects" john asked for
+            self.query_one("#aspects-grid", Static).update(
+                astrolog.natal_grid(person.path))
             self.query_one("#wheel-out", Static).update(astrolog.wheel(person.path))
             # graphic wheel on every chart screen (natal/aspects/transits);
             # synastry gets the overlay image once a partner is picked
@@ -387,7 +429,11 @@ class AstroApp(App):
             return
         lines = [f"{ev.body} ({ev.body_sign}) {ev.kind} natal {ev.natal_body} "
                  f"({ev.natal_sign})",
-                 f"exact: {ev.date} at {ev.time}",
+                 # be explicit about what the -t timestamp actually is:
+                 # astrolog emits the exact moment the aspect perfects (is
+                 # exact), NOT the start or end of the orb window.
+                 f"exact hit (peak): {ev.date} at {ev.time} — this is when the "
+                 f"aspect is exact, not the orb start/end",
                  f"power score: {ev.power:.2f}"
                  + ("  🔺 POWERFUL" if ev.powerful else "")]
         # look up the -V power graph for the event's month
@@ -418,6 +464,13 @@ class AstroApp(App):
         # PersonForm is a Static (not focusable itself) — focus the first
         # Input instead so keys (incl. escape -> cancel) reach the form.
         form.query_one("#field-name", Input).focus()
+
+    def action_edit_person(self) -> None:
+        """edit the selected person's birth data (rewrites the chart file)."""
+        if not self.selected:
+            self.notify("pick a person first (enter or click)", severity="warning")
+            return
+        self.query_one("#form", PersonForm).start_edit(self.selected)
 
     def action_delete_person(self) -> None:
         if self.selected and self.selected.path:

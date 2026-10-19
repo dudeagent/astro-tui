@@ -369,6 +369,23 @@ def render_bmp_ansi(data: bytes, cols: int = 44, rows: int = 24) -> str:
     return "\n".join(out)
 
 
+def wheel_image(chart: Path, partner: Path | None = None):
+    """astrolog's graphic wheel as a PIL image (for textual-image display).
+    same -Xb0/-Xo/-w invocation as wheel_bitmap; returns a Pillow Image.
+    """
+    from PIL import Image
+    import io
+    data = wheel_bitmap(chart, partner)
+    return Image.open(io.BytesIO(data))
+
+
+def natal_grid(chart: Path) -> str:
+    """astrolog's aspect grid (-g): the matrix view of every body pair with
+    its exact aspect glyph, orb degrees and declination info.
+    """
+    return run(["-i", str(chart), "-g"])
+
+
 def transits_graph(chart: Path, month: int, year: int) -> dict[str, list[int | None]]:
     """parse astrolog's -V <month> <year> monthly transit-power graph.
 

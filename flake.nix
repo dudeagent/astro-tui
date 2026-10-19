@@ -21,7 +21,7 @@
           version = "0.1.0";
           format = "pyproject";
           src = self;
-          propagatedBuildInputs = [ python.pkgs.textual ];
+          propagatedBuildInputs = [ python.pkgs.textual python.pkgs.textual-image python.pkgs.pillow ];
           nativeBuildInputs = [ python.pkgs.setuptools ];
           nativeCheckInputs = [ python.pkgs.pytest python.pkgs.pytest-asyncio pkgs.astrolog ];
           # runtime: the app shells out to the astrolog binary, so it has to
@@ -45,7 +45,7 @@
         packages.default = astro-tui;
         packages.astro-tui = astro-tui;
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.astrolog python python.pkgs.textual python.pkgs.pytest python.pkgs.pytest-asyncio ];
+          buildInputs = [ pkgs.astrolog python python.pkgs.textual python.pkgs.textual-image python.pkgs.pillow python.pkgs.pytest python.pkgs.pytest-asyncio ];
         };
         apps.default = flake-utils.lib.mkApp { drv = astro-tui; };
       });

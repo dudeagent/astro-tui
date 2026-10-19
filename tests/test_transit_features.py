@@ -188,7 +188,7 @@ class TestAppTransitTab(unittest.TestCase):
         app.show_transit_detail(mock.Mock(value="1"))
         text = detail.update.call_args[0][0]
         self.assertIn("Sun (Lib) Sex natal Mars", text)
-        self.assertIn("exact: 10/3/2026 at 1:02am", text)
+        self.assertIn("exact hit (peak): 10/3/2026 at 1:02am", text)
 
     def test_show_transit_detail_bad_key_notifies(self):
         app = self.app_module.AstroApp()
