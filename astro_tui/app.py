@@ -106,7 +106,12 @@ class MaximizeScreen(ModalScreen):
         self.image = image
 
     def compose(self) -> ComposeResult:
-        view = WheelView("", id="maximized-wheel")
+        # the image must be passed to the Static itself — setting view.image
+        # alone leaves the widget's content as "" so the maximize screen
+        # renders an empty pane (the bug john hit on 10-19)
+        renderable = (AutoImageRenderable(self.image) if self.image is not None
+                      else Text("no wheel image"))
+        view = WheelView(renderable, id="maximized-wheel")
         view.image = self.image
         yield view
 
@@ -329,7 +334,9 @@ class AstroApp(App):
                         yield Static("", classes="pre", id="transit-detail")
                         yield WheelView("", classes="pre", id="transit-wheel")
                 with TabPane("wheel", id="tab-wheel"):
-                    yield Static("", classes="pre", id="wheel-out")
+                    # the graphic wheel image, not the ascii one (john: "make
+                    # it the img pls")
+                    yield WheelView("", classes="pre", id="big-wheel")
                 with TabPane("synastry", id="tab-synastry"):
                     with VerticalScroll():
                         yield Select([("choose partner...", None)], id="synastry-partner", allow_blank=True)
@@ -417,6 +424,7 @@ class AstroApp(App):
             wid = {"tab-natal": "#natal-wheel",
                    "tab-aspects": "#aspects-wheel",
                    "tab-transits": "#transit-wheel",
+                   "tab-wheel": "#big-wheel",
                    "tab-synastry": "#synastry-wheel"}.get(tab)
             if wid is None:
                 self.notify("no wheel on this tab", severity="warning")
@@ -442,11 +450,12 @@ class AstroApp(App):
             # "better table of aspects" john asked for
             self.query_one("#aspects-grid", Static).update(
                 astrolog.natal_grid(person.path))
-            self.query_one("#wheel-out", Static).update(astrolog.wheel(person.path))
-            # graphic wheel on every chart screen (natal/aspects/transits);
-            # synastry gets the overlay image once a partner is picked
+            # graphic wheel on every chart screen (natal/aspects/transits),
+            # the dedicated wheel tab, and synastry gets the overlay image
+            # once a partner is picked
             img = self._wheel_image(person)
-            for wid in ("natal-wheel", "aspects-wheel", "transit-wheel"):
+            for wid in ("natal-wheel", "aspects-wheel", "transit-wheel",
+                        "big-wheel"):
                 self._set_wheel(f"#{wid}", img)
             self.load_transit_events(person)
             self.refresh_synastry_options(person)

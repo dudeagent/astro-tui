@@ -370,6 +370,74 @@ async def test_journey_wheel_maximizes_via_hotkey(app):
 
 
 @pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_wheel_tab_shows_image(app):
+    """the dedicated 'wheel' tab shows the graphic wheel image, not the ascii
+    wheel (john: 'make it the img pls'). big-wheel gets the same PIL image as
+    the other wheels, and its Static content is a renderable, not ascii text."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        big = app.query_one("#big-wheel", app_module.WheelView)
+        assert big.image is not None, "wheel tab must hold a PIL image"
+        # the ascii wheel should be gone from the wheel tab entirely
+        assert "#wheel-out" not in str(app.query("#tab-wheel Static"))
+        # clicking the wheel-tab image maximizes it too
+        app.query_one("#content", app_module.TabbedContent).active = "tab-wheel"
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        from astro_tui.app import MaximizeScreen
+        assert isinstance(app.screen, MaximizeScreen), \
+            "m on the wheel tab should maximize the big-wheel image"
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_synastry_wheel_renders_image(app):
+    """picking a partner fills the synastry wheel with the overlay image —
+    the render-breaks-on-synastry bug. the wheel must hold a PIL image and
+    be clickable/maximizable like the others."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app, name="Alpha")
+        await seed_person(app, name="Beta")
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("s")
+        await pilot.press("enter")
+        await pilot.press("down")
+        await pilot.press("enter")
+        await pilot.pause()
+        wheel = app.query_one("#synastry-wheel", app_module.WheelView)
+        assert wheel.image is not None, "synastry wheel should hold the overlay image"
+        from PIL import Image
+        assert isinstance(wheel.image, Image.Image)
+        # maximize the synastry wheel via the hotkey
+        app.query_one("#content", app_module.TabbedContent).active = "tab-synastry"
+        await pilot.pause()
+        await pilot.press("m")
+        await pilot.pause()
+        from astro_tui.app import MaximizeScreen
+        assert isinstance(app.screen, MaximizeScreen)
+        await pilot.pause()  # let the modal mount its widgets
+        # and the maximize screen actually shows the image (not an empty pane);
+        # query on the modal screen itself — app.query_one may search the main
+        # screen while the modal sits on top of the stack
+        maxw = app.screen.query_one("#maximized-wheel", app_module.WheelView)
+        assert maxw.image is not None
+        assert maxw.content is not None and not isinstance(maxw.content, str)
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
 async def test_journey_wheel_maximizes_via_click(app):
     """clicking the wheel image maximizes it (john: 'images maximize when
     you click them'); clicking inside the modal closes it again."""
