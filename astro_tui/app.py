@@ -14,9 +14,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, Footer, Header, Input, Label, ListView, ListItem, Select, Static
 from textual.widgets import DataTable, TabbedContent, TabPane
+from textual.screen import ModalScreen
+from textual_image.widget import AutoRenderable as AutoImageRenderable
 
 from . import astrolog, geo, lore
-from .chart import ChartWheel, MaximizeScreen  # custom scalable renderer
 
 DATA_DIR = Path(os.environ.get("ASTRO_TUI_DATA", Path.home() / ".astro-tui"))
 
@@ -74,6 +75,45 @@ def render_aspect_graph(text: str) -> Text:
         out.append(f"  orb {a.orb:<7} power {a.power}\n", style="grey50")
     return out if out.plain.strip("\n").count("\n") >= 2 else Text("no aspects found")
 
+
+class WheelView(Static):
+    """a static that holds a PIL wheel image; clicking it maximizes the
+    image full-screen (same as the 'm' hotkey)."""
+
+    image = None
+
+    def on_click(self, event) -> None:
+        if self.image is None:
+            return
+        # inside MaximizeScreen a click dismisses it instead of pushing
+        # another maximize on top of itself
+        if isinstance(self.screen, MaximizeScreen):
+            self.screen.dismiss()
+        else:
+            self.app.action_maximize_wheel(self.image)
+
+
+class MaximizeScreen(ModalScreen):
+    """full-screen modal showing one wheel image bigger. click anywhere or
+    press escape/q/m to close."""
+
+    BINDINGS = [Binding("escape", "dismiss", "close"),
+                Binding("q", "dismiss", "close"),
+                Binding("m", "dismiss", "close")]
+
+    def __init__(self, image) -> None:
+        super().__init__()
+        self.image = image
+
+    def compose(self) -> ComposeResult:
+        # the image must be passed to the Static itself — setting view.image
+        # alone leaves the widget's content as "" so the maximize screen
+        # renders an empty pane (the bug john hit on 10-19)
+        renderable = (AutoImageRenderable(self.image) if self.image is not None
+                      else Text("no wheel image"))
+        view = WheelView(renderable, id="maximized-wheel")
+        view.image = self.image
+        yield view
 
 class PersonForm(Static):
     """modal form to add a person (writes an astrolog chart file)."""
@@ -250,9 +290,7 @@ class AstroApp(App):
     #city-results { display: none; height: auto; max-height: 10; border-top: solid $primary; }
     DataTable { height: 1fr; }
     MaximizeScreen { background: $surface; align: center middle; }
-    MaximizeScreen ChartWheel { width: 1fr; height: 1fr; }
-    ChartWheel { height: 50%; }
-    #big-wheel { height: 1fr; }
+    MaximizeScreen WheelView { width: 1fr; height: 1fr; }
     """
     BINDINGS = [
         Binding("n", "new_person", "add person"),
@@ -281,7 +319,7 @@ class AstroApp(App):
                 with TabPane("natal", id="tab-natal"):
                     with VerticalScroll():
                         yield Static("pick a person", classes="pre", id="natal-out")
-                        yield ChartWheel(id="natal-wheel")
+                        yield WheelView("", classes="pre", id="natal-wheel")
                 with TabPane("aspects", id="tab-aspects"):
                     with VerticalScroll():
                         # colored glyph graph FIRST, then the plain text list
@@ -289,23 +327,23 @@ class AstroApp(App):
                         yield Static("", classes="pre", id="aspects-graph")
                         yield Static("", classes="pre", id="aspects-out")
                         yield Static("", classes="pre", id="aspects-grid")
-                        yield ChartWheel(id="aspects-wheel")
+                        yield WheelView("", classes="pre", id="aspects-wheel")
                 with TabPane("transits", id="tab-transits"):
                     with VerticalScroll():
                         yield DataTable(id="transit-table")
                         yield Static("", classes="pre", id="transit-detail")
-                        yield ChartWheel(id="transit-wheel")
+                        yield WheelView("", classes="pre", id="transit-wheel")
                 with TabPane("wheel", id="tab-wheel"):
-                    # the custom chart wheel, full-height — it scales to the
-                    # pane (sign ring, houses, planets, aspects)
-                    yield ChartWheel(id="big-wheel")
+                    # the graphic wheel image, not the ascii one (john: "make
+                    # it the img pls")
+                    yield WheelView("", classes="pre", id="big-wheel")
                 with TabPane("synastry", id="tab-synastry"):
                     with VerticalScroll():
                         yield Select([("choose partner...", None)], id="synastry-partner", allow_blank=True)
                         # graph before the text list here too
                         yield Static("", classes="pre", id="synastry-graph")
                         yield Static("", classes="pre", id="synastry-out")
-                        yield ChartWheel(id="synastry-wheel")
+                        yield WheelView("", classes="pre", id="synastry-wheel")
                 with TabPane("lore", id="tab-lore"):
                     with VerticalScroll():
                         yield Static(lore_text(), classes="pre", id="lore-out")
@@ -357,44 +395,31 @@ class AstroApp(App):
         elif event.data_table.id == "transit-table":
             self.show_transit_detail(event.row_key)
 
-    def _wheel_data(self, person: astrolog.Person,
-                    partner: astrolog.Person | None = None) -> dict:
-        """the chart data the custom renderer plots: natal positions
-        (with cusps from the same -v output), natal aspects, and for
-        synastry the partner's positions plus the inter-chart aspects.
-        returns {} when astrolog fails — the wheel then keeps whatever
-        it had."""
+    def _wheel_image(self, person: astrolog.Person,
+                     partner: astrolog.Person | None = None):
+        """astrolog's graphic wheel as a raw PIL image (the WheelView widgets
+        wrap it in a renderable themselves and keep the image around so it can
+        be maximized full-screen)."""
         try:
-            natal = astrolog.parse_positions(astrolog.natal_positions(person.path))
-            cusps = astrolog.parse_cusps(astrolog.natal_positions(person.path))
-            aspects = astrolog.parse_aspects(astrolog.natal_aspects(person.path))
-            data = {"positions": natal, "cusps": cusps, "aspects": aspects}
-            if partner is not None:
-                data["partner"] = astrolog.parse_positions(
-                    astrolog.natal_positions(partner.path))
-                data["aspects"] = astrolog.parse_aspects(
-                    astrolog.synastry_aspects(person.path, partner.path))
-            return data
-        except astrolog.AstrologError:
-            return {}
+            return astrolog.wheel_image(person.path,
+                                        partner.path if partner else None)
+        except Exception:
+            return None
 
-    def _set_wheel(self, selector: str, data: dict) -> None:
-        """update a ChartWheel widget with the parsed chart data."""
-        w = self.query_one(selector, ChartWheel)
-        w.positions = data.get("positions", [])
-        w.cusps = data.get("cusps", {})
-        w.aspects = data.get("aspects", [])
-        w.partner_positions = data.get("partner", [])
-        w.refresh()
+    def _set_wheel(self, selector: str, img) -> None:
+        """update a WheelView widget: render the image (if any) and keep the
+        raw PIL image on the widget so clicking it / pressing 'm' can
+        maximize it full-screen."""
+        w = self.query_one(selector, WheelView)
+        w.image = img
+        w.update(AutoImageRenderable(img) if img is not None
+                 else Text("wheel render failed"))
 
     def action_maximize_wheel(self, image=None) -> None:
-        """maximize the chart wheel full-screen. the 'm' hotkey grabs the
-        wheel from the currently active tab; ChartWheel clicks push it
-        directly."""
-        wheel = None
-        if image is not None:
-            wheel = image
-        else:
+        """maximize the wheel image full-screen. 'image' is passed directly by
+        WheelView clicks; the 'm' hotkey grabs the image from the wheel view
+        in the currently active tab."""
+        if image is None:
             tab = self.query_one("#content", TabbedContent).active
             wid = {"tab-natal": "#natal-wheel",
                    "tab-aspects": "#aspects-wheel",
@@ -404,11 +429,11 @@ class AstroApp(App):
             if wid is None:
                 self.notify("no wheel on this tab", severity="warning")
                 return
-            wheel = self.query_one(wid, ChartWheel)
-        if wheel is None or not wheel.positions:
-            self.notify("no chart to maximize", severity="warning")
+            image = self.query_one(wid, WheelView).image
+        if image is None:
+            self.notify("no wheel image to maximize", severity="warning")
             return
-        self.push_screen(MaximizeScreen(wheel))
+        self.push_screen(MaximizeScreen(image))
 
     def show_person(self, person: astrolog.Person) -> None:
         try:
@@ -425,13 +450,13 @@ class AstroApp(App):
             # "better table of aspects" john asked for
             self.query_one("#aspects-grid", Static).update(
                 astrolog.natal_grid(person.path))
-            # custom chart wheel on every chart screen (natal/aspects/
-            # transits), the dedicated full-height wheel tab, and synastry
-            # gets the bi-wheel once a partner is picked
-            data = self._wheel_data(person)
+            # graphic wheel on every chart screen (natal/aspects/transits),
+            # the dedicated wheel tab, and synastry gets the overlay image
+            # once a partner is picked
+            img = self._wheel_image(person)
             for wid in ("natal-wheel", "aspects-wheel", "transit-wheel",
                         "big-wheel"):
-                self._set_wheel(f"#{wid}", data)
+                self._set_wheel(f"#{wid}", img)
             self.load_transit_events(person)
             self.refresh_synastry_options(person)
             # keep focus on the table so the user can arrow to another row
@@ -449,7 +474,7 @@ class AstroApp(App):
         sel.value = None
         self.query_one("#synastry-graph", Static).update("")
         self.query_one("#synastry-out", Static).update("")
-        self._set_wheel("#synastry-wheel", {})
+        self._set_wheel("#synastry-wheel", None)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "synastry-partner" or event.value is None:
@@ -471,7 +496,7 @@ class AstroApp(App):
                 f"{person.name} <-> {partner.name} "
                 f"(sorted by power):\n" + render_aspects(text))
             self._set_wheel("#synastry-wheel",
-                            self._wheel_data(person, partner))
+                            self._wheel_image(person, partner))
             self.notify(f"synastry: {person.name} x {partner.name}")
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")

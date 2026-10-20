@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -162,13 +163,6 @@ class Position:
     sign: str
     house: int
     retro: bool
-    minute: int = 0
-
-    @property
-    def lon(self) -> float:
-        """absolute ecliptic longitude in degrees (sign index * 30 + deg
-        + minute/60) — what the custom chart renderer plots with."""
-        return SIGNS.index(self.sign[:3]) * 30 + self.deg + self.minute / 60.0
 
 
 @dataclass
@@ -261,8 +255,6 @@ def parse_transit_events(text: str) -> list[TransitEvent]:
 
 _RE_POS = re.compile(
     r"^(\w{3,4})\s*:\s*(\d{1,2})([A-Za-z]{3})(\d{1,2})(\s+R)?.*?\[ *(\d+)(?:st|nd|rd|th) house\]")
-_RE_CUSP = re.compile(r"House cusp\s+(\d+):\s+(\d{1,2})([A-Za-z]{3})(\d{1,2})")
-
 # unified aspect parser: handles natal (-a), transit (-Tn), and
 # synastry (-r0 -a) lines. bodies may be multi-word ("North Node"),
 # signs appear in parens or brackets, "with"/"natal" markers optional.
@@ -288,22 +280,8 @@ def parse_positions(text: str) -> list[Position]:
         if m:
             body = {"Nort": "North Node", "Asce": "Ascendant", "Midh": "Midheaven"}.get(m.group(1), m.group(1))
             out.append(Position(body, int(m.group(2)), m.group(3).capitalize(),
-                                int(m.group(6)), bool(m.group(5)), int(m.group(4))))
+                                int(m.group(6)), bool(m.group(5))))
     return out
-
-
-def parse_cusps(text: str) -> dict[int, tuple[int, str, int]]:
-    """parse the 'House cusp N: 20Leo42' lines from -v output into
-    {N: (deg, sign, minute)}. these are the house cusps the custom wheel
-    renderer draws spokes for."""
-    out = {}
-    for line in text.splitlines():
-        m = _RE_CUSP.search(line)
-        if m:
-            out[int(m.group(1))] = (int(m.group(2)), m.group(3).capitalize(),
-                                    int(m.group(4)))
-    return out
-
 
 
 def parse_aspects(text: str) -> list[Aspect]:
@@ -327,6 +305,10 @@ def natal_positions(chart: Path) -> str:
 
 def natal_aspects(chart: Path) -> str:
     return run(["-i", str(chart), "-a"])
+
+
+def wheel(chart: Path) -> str:
+    return run(["-i", str(chart), "-w"])
 
 
 def transits_today(chart: Path) -> str:
@@ -365,6 +347,90 @@ def synastry_grid(c1: Path, c2: Path) -> str:
 
 def synastry_aspects(c1: Path, c2: Path) -> str:
     return run(["-r0", str(c1), str(c2), "-a"])
+
+
+def wheel_bitmap(chart: Path, partner: Path | None = None,
+                 tmp_dir: Path | None = None, width: int = 2048) -> bytes:
+    """astrolog's graphic wheel as BMP bytes. with a partner chart it
+    draws the synastry overlay (-r0 file1 file2 -w).
+
+    arg order matters: -r0 <f1> <f2> must come before -Xb0/-Xo, or astrolog
+    tries to open the switches as chart files.
+
+    'width' is the horizontal pixel size of the rendered graphic (-Xw);
+    default 2048 so the wheel is high-resolution and can be maximized
+    full-screen without being a tiny upscaled blob.
+    """
+    if tmp_dir is None:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="astro-tui-"))
+    out = tmp_dir / "wheel.bmp"
+    args = (["-r0", str(chart), str(partner)] if partner
+            else ["-i", str(chart)])
+    run(args + [f"-Xw", str(width), "-Xb0", "-Xo", str(out), "-w"])
+    data = out.read_bytes()
+    out.unlink(missing_ok=True)
+    return data
+
+
+def parse_bmp(data: bytes) -> tuple[list[list[tuple[int, int, int]]], int, int]:
+    """parse a 24-bit uncompressed Windows BMP into RGB rows + width/height.
+    BMP rows are bottom-up and padded to 4-byte boundaries."""
+    if data[:2] != b"BM":
+        raise ValueError("not a BMP file")
+    offset = struct.unpack_from("<I", data, 10)[0]
+    width, height = struct.unpack_from("<ii", data, 18)
+    bpp = struct.unpack_from("<H", data, 28)[0]
+    if bpp != 24:
+        raise ValueError(f"only 24-bit BMPs supported, got {bpp}bpp")
+    row_size = ((width * 3 + 3) // 4) * 4
+    rows: list[list[tuple[int, int, int]]] = []
+    for y in range(abs(height)):
+        start = offset + y * row_size
+        row = [tuple(data[start + x * 3:start + x * 3 + 3][::-1])
+               for x in range(width)]
+        rows.append(row)  # bottom-up; caller indexes by source row
+    if height > 0:
+        rows.reverse()  # top-down
+    return rows, width, abs(height)
+
+
+def render_bmp_ansi(data: bytes, cols: int = 44, rows: int = 24) -> str:
+    """render a 24-bit BMP as an ANSI-colored unicode-halfblock string.
+
+    nearest-neighbor downsample to cols x 2*rows pixels, then each output
+    row emits one '▀' char whose fg = top pixel and bg = bottom pixel —
+    double vertical resolution without any image dependency.
+    """
+    px, w, h = parse_bmp(data)
+    out = []
+    for r in range(rows):
+        sy0 = min(h - 1, r * h // rows)
+        sy1 = min(h - 1, (2 * r + 1) * h // (2 * rows))
+        line = []
+        for c in range(cols):
+            sx = min(w - 1, c * w // cols)
+            top = px[sy0][sx]
+            bot = px[sy1][sx]
+            line.append(f"\x1b[38;2;{top[0]};{top[1]};{top[2]};48;2;"
+                        f"{bot[0]};{bot[1]};{bot[2]}m▀")
+        out.append("".join(line) + "\x1b[0m")
+    return "\n".join(out)
+
+
+def wheel_image(chart: Path, partner: Path | None = None,
+                width: int = 2048):
+    """astrolog's graphic wheel as a PIL image (for textual-image display).
+    same -Xb0/-Xo/-w invocation as wheel_bitmap; returns a Pillow Image.
+
+    'width' passes through to wheel_bitmap (astrolog -Xw) so the generated
+    bitmap is high-resolution; the default is large enough that a maximized
+    wheel fills a full-screen terminal window.
+    """
+    from PIL import Image
+    import io
+    data = wheel_bitmap(chart, partner, width=width)
+    return Image.open(io.BytesIO(data))
+
 
 def natal_grid(chart: Path) -> str:
     """astrolog's aspect grid (-g): the matrix view of every body pair with

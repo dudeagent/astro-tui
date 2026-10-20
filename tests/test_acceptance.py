@@ -357,8 +357,7 @@ async def test_journey_wheel_maximizes_via_hotkey(app):
         table.focus()
         await pilot.press("enter")
         await pilot.pause()
-        assert app.query_one("#natal-wheel", app_module.ChartWheel).positions, \
-            "natal wheel should hold parsed planet positions"
+        assert app.query_one("#natal-wheel", app_module.WheelView).image is not None
         await pilot.press("m")
         await pilot.pause()
         from astro_tui.app import MaximizeScreen
@@ -381,9 +380,8 @@ async def test_journey_wheel_tab_shows_image(app):
         table.focus()
         await pilot.press("enter")
         await pilot.pause()
-        big = app.query_one("#big-wheel", app_module.ChartWheel)
-        assert big.positions, "wheel tab must hold parsed planet positions"
-        assert big.cusps, "wheel tab should have house cusps for the sign ring"
+        big = app.query_one("#big-wheel", app_module.WheelView)
+        assert big.image is not None, "wheel tab must hold a PIL image"
         # the ascii wheel should be gone from the wheel tab entirely
         assert "#wheel-out" not in str(app.query("#tab-wheel Static"))
         # clicking the wheel-tab image maximizes it too
@@ -416,11 +414,10 @@ async def test_journey_synastry_wheel_renders_image(app):
         await pilot.press("down")
         await pilot.press("enter")
         await pilot.pause()
-        wheel = app.query_one("#synastry-wheel", app_module.ChartWheel)
-        assert wheel.positions, "synastry wheel should hold the natal positions"
-        assert wheel.partner_positions, \
-            "synastry wheel should hold the partner positions (bi-wheel)"
-        assert wheel.aspects, "synastry wheel should hold inter-chart aspects"
+        wheel = app.query_one("#synastry-wheel", app_module.WheelView)
+        assert wheel.image is not None, "synastry wheel should hold the overlay image"
+        from PIL import Image
+        assert isinstance(wheel.image, Image.Image)
         # maximize the synastry wheel via the hotkey
         app.query_one("#content", app_module.TabbedContent).active = "tab-synastry"
         await pilot.pause()
@@ -432,10 +429,9 @@ async def test_journey_synastry_wheel_renders_image(app):
         # and the maximize screen actually shows the image (not an empty pane);
         # query on the modal screen itself — app.query_one may search the main
         # screen while the modal sits on top of the stack
-        maxw = app.screen.query_one("#maximized-wheel", app_module.ChartWheel)
-        assert maxw.positions, "maximized wheel should carry the chart data"
-        assert maxw.partner_positions, \
-            "maximized synastry wheel should keep the bi-wheel partner"
+        maxw = app.screen.query_one("#maximized-wheel", app_module.WheelView)
+        assert maxw.image is not None
+        assert maxw.content is not None and not isinstance(maxw.content, str)
         await pilot.press("escape")
         await pilot.pause()
         await pilot.press("q")
