@@ -352,6 +352,15 @@ class AstroApp(App):
                 with TabPane("lore", id="tab-lore"):
                     with VerticalScroll():
                         yield Static(lore_text(), classes="pre", id="lore-out")
+                        # liber 777 searchable correspondence table: search box
+                        # + display-column picker, results below (separate from
+                        # the always-visible static reference above)
+                        yield Input(placeholder="search liber 777 — type, press enter", id="lore-search")
+                        yield Select([("all columns", "all")] +
+                                     [(c, c) for c in lore.LIBER777_COLUMNS
+                                      if c not in ("name", "type")],
+                                     id="lore-column", allow_blank=False)
+                        yield Static("", classes="pre", id="lore-results")
                 with TabPane("raw -HI", id="tab-hi"):
                     yield Static("", classes="pre", id="hi-out")
         yield PersonForm(id="form")
@@ -381,6 +390,19 @@ class AstroApp(App):
         else:
             # never fail silently again
             self.notify(f"no person for row {key!r}", severity="error")
+
+    def _update_lore_results(self) -> None:
+        """render the liber 777 search results for the current query/column."""
+        q = self.query_one("#lore-search", Input).value
+        col = self.query_one("#lore-column", Select).value or "all"
+        self.query_one("#lore-results", Static).update(
+            lore.search_liber777(q, display_column=col))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # the city/field inputs are handled inside PersonForm; the lore search
+        # lives in the main tab pane, so its submit bubbles to the app
+        if event.input.id == "lore-search":
+            self._update_lore_results()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # enter / keyboard selection — dispatch by table id (textual dispatches
@@ -493,6 +515,9 @@ class AstroApp(App):
         self._set_wheel("#synastry-wheel", None)
 
     def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "lore-column":
+            self._update_lore_results()
+            return
         if event.select.id != "synastry-partner" or event.value is None:
             return
         partner = next((p for p in self.people

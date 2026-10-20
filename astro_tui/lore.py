@@ -142,3 +142,221 @@ def moon_mansion(deg: int, sign: str) -> str:
 _SIGN_IDX = {s: i for i, s in enumerate(
     ["Ari", "Tau", "Gem", "Can", "Leo", "Vir",
      "Lib", "Sco", "Sag", "Cap", "Aqr", "Pis"])}
+
+
+# --- liber 777 searchable correspondence table ---
+# crowley's liber 777 condensed to terminal-friendly columns. one row per
+# entity (sephira/planet/sign/path/decan); empty string = not applicable.
+# sephiroth/planets/signs reuse the golden dawn tables above; paths and
+# decans are new. search_liber777() renders matches as readable blocks.
+LIBER777_COLUMNS = [
+    "name", "type", "sephira", "path", "element", "modality",
+    "ruler", "hebrew", "tarot", "kingcolor", "divinename", "sign",
+    "meaning"]
+
+# pretty labels for the columns (shown in the UI / output blocks)
+LIBER777_LABELS = {
+    "name": "name", "type": "type", "sephira": "sephira",
+    "path": "path", "element": "element", "modality": "modality",
+    "ruler": "ruler", "hebrew": "hebrew", "tarot": "tarot",
+    "kingcolor": "king color", "divinename": "divine name",
+    "sign": "sign", "meaning": "meaning"}
+
+
+def _777row(**kw):
+    row = {c: "" for c in LIBER777_COLUMNS}
+    row.update(kw)
+    return row
+
+
+def _777_sign_sephira(ruler: str) -> str:
+    return PLANET_SEPHIROTH.get(ruler.split("/")[0], "-")
+
+
+_SEPHIRA_MEANINGS = {
+    "Kether": "unity, the point, pure being",
+    "Chokmah": "wisdom, the flash of intuition",
+    "Binah": "understanding, the great mother, form",
+    "Da'ath": "knowledge, the abyss, the gate",
+    "Chesed": "mercy, expansion, order",
+    "Geburah": "severity, strength, discipline",
+    "Tiphareth": "beauty, sacrifice, the heart of the tree",
+    "Netzach": "victory, endurance, desire",
+    "Hod": "splendour, intellect, communication",
+    "Yesod": "foundation, dreams, the unconscious",
+    "Malkuth": "kingdom, the manifest world",
+}
+
+_PLANET_MEANINGS = {
+    "Saturn": "structure, time, restriction",
+    "Jupiter": "expansion, fortune, mercy",
+    "Mars": "force, energy, conflict",
+    "Sun": "vitality, identity, the heart",
+    "Venus": "love, desire, beauty",
+    "Mercury": "intellect, communication, magic",
+    "Moon": "instinct, dreams, the subconscious",
+    "Pluto": "transformation, the underworld",
+    "Uranus": "disruption, invention",
+    "Neptune": "dissolution, mysticism",
+}
+
+_SIGN_MEANINGS = {
+    "Aries": "initiative, fire, the pioneer",
+    "Taurus": "stability, possessions, the builder",
+    "Gemini": "duality, communication, curiosity",
+    "Cancer": "nurture, home, memory",
+    "Leo": "radiance, creativity, the sovereign",
+    "Virgo": "discernment, service, craft",
+    "Libra": "balance, partnership, justice",
+    "Scorpio": "intensity, transformation, depth",
+    "Sagittarius": "exploration, philosophy, the arrow",
+    "Capricorn": "ambition, structure, the mountain",
+    "Aquarius": "invention, humanity, the waterbearer",
+    "Pisces": "dissolution, empathy, the ocean",
+}
+
+# golden dawn hebrew path attributions: (letter, path number, connects, tarot)
+_PATHS = [
+    ("Aleph", 11, "Kether–Chokmah", "The Fool (0)"),
+    ("Beth", 12, "Kether–Binah", "The Magician (1)"),
+    ("Gimel", 13, "Kether–Tiphareth", "The High Priestess (2)"),
+    ("Daleth", 14, "Chokmah–Binah", "The Empress (3)"),
+    ("Heh", 15, "Chokmah–Tiphareth", "The Emperor (4)"),
+    ("Vav", 16, "Chokmah–Chesed", "The Hierophant (5)"),
+    ("Zayin", 17, "Binah–Tiphareth", "The Lovers (6)"),
+    ("Cheth", 18, "Binah–Geburah", "The Chariot (7)"),
+    ("Teth", 19, "Chesed–Geburah", "Strength (8)"),
+    ("Yod", 20, "Chesed–Tiphareth", "The Hermit (9)"),
+    ("Kaph", 21, "Chesed–Netzach", "The Wheel of Fortune (10)"),
+    ("Lamed", 22, "Geburah–Tiphareth", "Justice (11)"),
+    ("Mem", 23, "Geburah–Hod", "The Hanged Man (12)"),
+    ("Nun", 24, "Tiphareth–Netzach", "Death (13)"),
+    ("Samekh", 25, "Tiphareth–Yesod", "Temperance (14)"),
+    ("Ayin", 26, "Tiphareth–Hod", "The Devil (15)"),
+    ("Pe", 27, "Netzach–Hod", "The Tower (16)"),
+    ("Tzaddi", 28, "Netzach–Yesod", "The Star (17)"),
+    ("Qoph", 29, "Netzach–Malkuth", "The Moon (18)"),
+    ("Resh", 30, "Hod–Tiphareth", "The Sun (19)"),
+    ("Shin", 31, "Hod–Malkuth", "Judgement (20)"),
+    ("Tav", 32, "Yesod–Malkuth", "The Universe (21)"),
+]
+
+_PATH_ELEMENTS = {"Aleph": "Air", "Mem": "Water", "Shin": "Fire"}
+
+_PATH_MEANINGS = {
+    "Aleph": "pure potential, the fool's leap",
+    "Beth": "will, communication, focus",
+    "Gimel": "the unseen, lunar mystery",
+    "Daleth": "love, fertility, the mother",
+    "Heh": "sight, authority, the window",
+    "Vav": "faith, obedience, the nail",
+    "Zayin": "choice, the sword, division",
+    "Cheth": "enclosure, the vessel",
+    "Teth": "serpent power, hidden strength",
+    "Yod": "the hand, inner work",
+    "Kaph": "rotation, fortune, the palm",
+    "Lamed": "teaching, equilibrium, the ox-goad",
+    "Mem": "water, suspended awareness",
+    "Nun": "death, movement, the fish",
+    "Samekh": "prophecy, the bow, circulation",
+    "Ayin": "the eye, material temptation",
+    "Pe": "the mouth, awakening by force",
+    "Tzaddi": "the fishhook, trust, meditation",
+    "Qoph": "the back of the head, sleep, the transition",
+    "Resh": "the head, solar consciousness",
+    "Shin": "fire, judgement, transformation",
+    "Tav": "the mark, the cosmic plan",
+}
+
+# golden dawn decan rulers (3 per sign) and minor-arcana cards.
+# minors run 2-10 of the suit following fire, earth, air, water (Aries = 2/Wands).
+_DECAN_RULERS = {
+    "Aries": ["Mars", "Sun", "Venus"],
+    "Taurus": ["Mercury", "Moon", "Saturn"],
+    "Gemini": ["Jupiter", "Mars", "Sun"],
+    "Cancer": ["Venus", "Mercury", "Moon"],
+    "Leo": ["Saturn", "Jupiter", "Mars"],
+    "Virgo": ["Sun", "Venus", "Mercury"],
+    "Libra": ["Moon", "Saturn", "Jupiter"],
+    "Scorpio": ["Mars", "Sun", "Venus"],
+    "Sagittarius": ["Mercury", "Moon", "Saturn"],
+    "Capricorn": ["Jupiter", "Mars", "Sun"],
+    "Aquarius": ["Venus", "Mercury", "Moon"],
+    "Pisces": ["Saturn", "Jupiter", "Mars"],
+}
+
+_SIGN_ELEMENT_SUIT = {
+    "Aries": ("Fire", "Wands"), "Leo": ("Fire", "Wands"),
+    "Sagittarius": ("Fire", "Wands"),
+    "Taurus": ("Earth", "Disks"), "Virgo": ("Earth", "Disks"),
+    "Capricorn": ("Earth", "Disks"),
+    "Gemini": ("Air", "Swords"), "Libra": ("Air", "Swords"),
+    "Aquarius": ("Air", "Swords"),
+    "Cancer": ("Water", "Cups"), "Scorpio": ("Water", "Cups"),
+    "Pisces": ("Water", "Cups"),
+}
+
+_DECAN_NUMBERS = {"Aries": 2, "Taurus": 5, "Gemini": 8,
+                  "Cancer": 2, "Leo": 5, "Virgo": 8,
+                  "Libra": 2, "Scorpio": 5, "Sagittarius": 8,
+                  "Capricorn": 2, "Aquarius": 5, "Pisces": 8}
+
+
+LIBER777_ROWS = []
+# build the table programmatically so the golden dawn data above stays the
+# single source of truth.
+for _name, _meaning, _divine, _planet in SEPHIROTH:
+    LIBER777_ROWS.append(_777row(
+        name=_name, type="sephira", divinename=_divine,
+        meaning=_SEPHIRA_MEANINGS.get(_name, "")))
+for _planet, _seph in PLANET_SEPHIROTH.items():
+    LIBER777_ROWS.append(_777row(
+        name=_planet, type="planet", sephira=_seph,
+        meaning=_PLANET_MEANINGS.get(_planet, "")))
+for (_name, _elem, _mod, _ruler, _heb, _tarot, _color) in SIGNS_GD:
+    LIBER777_ROWS.append(_777row(
+        name=_name, type="sign", element=_elem, modality=_mod,
+        ruler=_ruler, hebrew=_heb, tarot=_tarot, kingcolor=_color,
+        sephira=_777_sign_sephira(_ruler),
+        meaning=_SIGN_MEANINGS.get(_name, "")))
+for (_letter, _num, _connects, _tarot) in _PATHS:
+    LIBER777_ROWS.append(_777row(
+        name=_letter, type="path", path=_num, sephira=_connects,
+        tarot=_tarot, element=_PATH_ELEMENTS.get(_letter, ""),
+        meaning=_PATH_MEANINGS.get(_letter, "")))
+for _sign, (_elem, _suit) in _SIGN_ELEMENT_SUIT.items():
+    _start = _DECAN_NUMBERS[_sign]
+    for _i, _ruler in enumerate(_DECAN_RULERS[_sign]):
+        LIBER777_ROWS.append(_777row(
+            name=f"{_sign} {_i + 1} ({_i * 10}-{(_i + 1) * 10}\u00b0)",
+            type="decan", sign=_sign, element=_elem, ruler=_ruler,
+            tarot=f"{_start + _i} of {_suit}",
+            meaning=f"{(_i * 10)}-{(_i + 1) * 10}\u00b0 of {_sign}"))
+
+
+def search_liber777(query: str, display_column: str = "all") -> str:
+    """search the liber 777 table. substring match, case-insensitive, over
+    all columns. display_column "all" renders full blocks per match; any
+    other column name renders just that column (name/type header kept)."""
+    q = (query or "").strip().lower()
+    if not q:
+        return ""
+    matches = [r for r in LIBER777_ROWS
+               if any(q in str(v).lower() for v in r.values())]
+    if not matches:
+        return f"no matches for {query!r} in the liber 777 table"
+    out = []
+    shown = matches[:40]  # keep the pane sane
+    if display_column == "all":
+        for row in shown:
+            body = [f"  {LIBER777_LABELS[c]}: {row[c]}" for c in LIBER777_COLUMNS
+                    if c not in ("name", "type") and row[c]]
+            out.append(f"— {row['name']} ({row['type']})\n" + "\n".join(body))
+    else:
+        for row in shown:
+            if row.get(display_column):
+                out.append(f"{row['name']} ({row['type']}): {row[display_column]}")
+    result = "\n\n".join(out)
+    if len(matches) > 40:
+        result += f"\n\n(+{len(matches) - 40} more — refine the search)"
+    return result

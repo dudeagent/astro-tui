@@ -158,3 +158,59 @@ def test_render_aspect_graph_glyphs_and_order():
     assert "no aspects" in empty.plain
     junk = render_aspect_graph("complete nonsense\nnot aspects at all")
     assert isinstance(junk, Text)
+
+
+# --- liber 777 searchable correspondence table ---
+
+def test_liber777_table_shape():
+    """rows cover all four entity types, every row has all columns."""
+    types = {r["type"] for r in lore.LIBER777_ROWS}
+    assert types == {"sephira", "planet", "sign", "path", "decan"}
+    for r in lore.LIBER777_ROWS:
+        assert set(r.keys()) == set(lore.LIBER777_COLUMNS)
+        assert r["name"] and r["type"]
+    # spot-check a few classic attributions
+    signs = {r["name"]: r for r in lore.LIBER777_ROWS if r["type"] == "sign"}
+    assert signs["Aries"]["tarot"] == "The Emperor (4)"
+    assert signs["Aries"]["hebrew"] == "Heh"
+    assert signs["Aries"]["sephira"] == "Geburah"
+    paths = {r["name"]: r for r in lore.LIBER777_ROWS if r["type"] == "path"}
+    assert paths["Aleph"]["tarot"] == "The Fool (0)"
+    assert paths["Aleph"]["sephira"] == "Kether–Chokmah"
+    assert paths["Mem"]["element"] == "Water" and paths["Shin"]["element"] == "Fire"
+    decans = [r for r in lore.LIBER777_ROWS if r["type"] == "decan"]
+    assert len(decans) == 36
+    a1 = next(r for r in decans if r["name"].startswith("Aries 1"))
+    assert a1["tarot"] == "2 of Wands" and a1["ruler"] == "Mars"
+    p3 = next(r for r in decans if r["name"].startswith("Pisces 3"))
+    assert p3["tarot"] == "10 of Cups"
+
+
+def test_search_liber777_all_columns():
+    """full-block rendering shows labeled fields for every match."""
+    out = lore.search_liber777("Saturn")
+    assert "— Saturn (planet)" in out
+    assert "sephira: Binah" in out
+    assert "Capricorn (sign)" in out and "Aquarius (sign)" in out
+    assert "king color: Indigo" in out  # pretty label, not raw key
+    assert "sign: Pisces" in out        # decan rows carry their sign
+    # no match case
+    assert "no matches" in lore.search_liber777("qxyzz")
+
+
+def test_search_liber777_display_column():
+    """single-column mode renders name (type): value lines only."""
+    out = lore.search_liber777("moon", display_column="tarot")
+    assert "Cancer (sign): The Chariot (7)" in out
+    assert "Qoph (path): The Moon (18)" in out
+    assert "meaning" not in out
+    # searching by tarot card value finds the row too
+    out2 = lore.search_liber777("the fool", display_column="tarot")
+    assert "Aleph (path): The Fool (0)" in out2
+
+
+def test_search_liber777_empty_and_cap():
+    """empty query -> empty output; >40 matches gets the cap notice."""
+    assert lore.search_liber777("") == ""
+    out = lore.search_liber777("a")  # matches nearly everything
+    assert "(+" in out and "more" in out

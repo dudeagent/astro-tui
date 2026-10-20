@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from textual.widgets import Input, Select
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -496,4 +497,36 @@ async def test_journey_wheel_two_sizes(app):
             f"maximized wheel should be centered, got {region}"
         await pilot.press("escape")
         await pilot.pause()
+        await pilot.press("q")
+
+
+async def test_journey_liber777_search(app):
+    """lore tab: search input + display-column picker drive #lore-results."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        app.query_one("#content", app_module.TabbedContent).active = "tab-lore"
+        await pilot.pause()
+        # widgets exist; empty state until a query is submitted
+        search = app.query_one("#lore-search", Input)
+        assert app.query_one("#lore-results").content == ""
+        # submit a search on enter (focus the input first so the key reaches it)
+        search = app.query_one("#lore-search", Input)
+        search.focus()
+        await pilot.pause()
+        search.value = "Saturn"
+        await pilot.press("enter")
+        await pilot.pause()
+        out = app.query_one("#lore-results").content
+        assert "Saturn (planet)" in out
+        assert "sephira: Binah" in out
+        # changing the display column re-renders single-column style
+        app.query_one("#lore-column", Select).value = "tarot"
+        await pilot.pause()
+        col_out = app.query_one("#lore-results").content
+        assert "Capricorn (sign): The Devil (15)" in col_out
+        assert "meaning" not in col_out
+        # clearing the query -> results empty again
+        search.value = ""
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#lore-results").content == ""
         await pilot.press("q")
