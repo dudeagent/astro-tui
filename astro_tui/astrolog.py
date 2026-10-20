@@ -22,6 +22,50 @@ SIGN_NAMES = ["Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo",
               "Libra", "Scorpio", "Sagittarius", "Capricorn",
               "Aquarius", "Pisces"]
 
+# unicode glyphs + rich color styles for the graphical aspect view.
+# john's ask: symbols for the signs/planets and use colors.
+PLANET_GLYPHS = {"Sun": "☉", "Moon": "☽", "Mercury": "☿",
+                 "Venus": "♀", "Mars": "♂", "Jupiter": "♃",
+                 "Saturn": "♄", "Uranus": "♅", "Neptune": "♆",
+                 "Pluto": "♇", "North Node": "☊", "South Node": "☋",
+                 "Chiron": "⚷", "Ascendant": "AC", "Midheaven": "MC"}
+SIGN_GLYPHS = dict(zip(SIGNS, "♈♉♊♋♌♍♎♏♐♑♒♓"))
+ASPECT_GLYPHS = {"Con": "☌", "Opp": "☍", "Tri": "△",
+                 "Squ": "□", "Sex": "⚹", "Ses": "⚻",
+                 "Sem": "⚼", "Qui": "⚺"}
+PLANET_COLORS = {"Sun": "yellow", "Moon": "white", "Mercury": "green",
+                 "Venus": "cyan", "Mars": "red", "Jupiter": "blue",
+                 "Saturn": "grey70", "Uranus": "magenta",
+                 "Neptune": "sky_blue1", "Pluto": "purple",
+                 "North Node": "orange1", "South Node": "orange1",
+                 "Chiron": "grey50", "Ascendant": "bright_white",
+                 "Midheaven": "bright_white"}
+ASPECT_COLORS = {"Con": "bold red", "Opp": "red", "Tri": "green",
+                 "Squ": "orange1", "Sex": "magenta", "Ses": "grey50",
+                 "Sem": "grey50", "Qui": "grey50"}
+
+
+def planet_glyph(name: str) -> str:
+    return PLANET_GLYPHS.get(name, name[:2])
+
+
+def sign_glyph(abbr: str) -> str:
+    """'Tau'/'tau'/'taurus' -> ♉; unknown abbrs pass through."""
+    key = abbr[:3].capitalize()
+    return SIGN_GLYPHS.get(key, key)
+
+
+def aspect_glyph(kind: str) -> str:
+    return ASPECT_GLYPHS.get(kind[:3].capitalize(), kind)
+
+
+def planet_color(name: str) -> str:
+    return PLANET_COLORS.get(name, "white")
+
+
+def aspect_color(kind: str) -> str:
+    return ASPECT_COLORS.get(kind[:3].capitalize(), "grey50")
+
 
 class AstrologError(RuntimeError):
     pass

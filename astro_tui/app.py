@@ -50,6 +50,66 @@ def _sparkline(values: list[int | None]) -> str:
     return "".join("·" if v is None else blocks[min(v, 8)] for v in values)
 
 
+def render_aspect_graph(text: str) -> Text:
+    """the aspects listing as a colored glyph graph: planet glyphs + sign
+    glyphs + aspect symbols, each colored by its planet/aspect. this is the
+    visual view that comes BEFORE the plain text list in the aspects (and
+    synastry) panes. returns rich Text so colors survive Static.update."""
+    out = Text()
+    out.append("☌ conj   △ trine   □ square   ☍ opp   ⚹ sextile\n",
+               style="grey50")
+    out.append("glyphs colored by planet/aspect — ☉ yellow ☽ white ☿ green "
+               "♀ cyan ♂ red ♃ blue ♄ grey ♅ mag ♆ sky ♇ purple\n\n",
+               style="grey50")
+    for a in astrolog.parse_aspects(text):
+        out.append(f"{astrolog.planet_glyph(a.body1):>2} ",
+                   style=astrolog.planet_color(a.body1))
+        out.append(f"{astrolog.sign_glyph(a.sign1)} ",
+                   style="grey58")
+        out.append(f"{astrolog.aspect_glyph(a.kind):>2} ",
+                   style=astrolog.aspect_color(a.kind))
+        out.append(f"{astrolog.sign_glyph(a.sign2)} ",
+                   style="grey58")
+        out.append(f"{astrolog.planet_glyph(a.body2):<2}",
+                   style=astrolog.planet_color(a.body2))
+        out.append(f"  orb {a.orb:<7} power {a.power}\n", style="grey50")
+    return out if out.plain.strip("\n").count("\n") >= 2 else Text("no aspects found")
+
+
+class WheelView(Static):
+    """a static that holds a PIL wheel image; clicking it maximizes the
+    image full-screen (same as the 'm' hotkey)."""
+
+    image = None
+
+    def on_click(self, event) -> None:
+        if self.image is None:
+            return
+        # inside MaximizeScreen a click dismisses it instead of pushing
+        # another maximize on top of itself
+        if isinstance(self.screen, MaximizeScreen):
+            self.screen.dismiss()
+        else:
+            self.app.action_maximize_wheel(self.image)
+
+
+class MaximizeScreen(ModalScreen):
+    """full-screen modal showing one wheel image bigger. click anywhere or
+    press escape/q/m to close."""
+
+    BINDINGS = [Binding("escape", "dismiss", "close"),
+                Binding("q", "dismiss", "close"),
+                Binding("m", "dismiss", "close")]
+
+    def __init__(self, image) -> None:
+        super().__init__()
+        self.image = image
+
+    def compose(self) -> ComposeResult:
+        view = WheelView("", id="maximized-wheel")
+        view.image = self.image
+        yield view
+
 class PersonForm(Static):
     """modal form to add a person (writes an astrolog chart file)."""
 
@@ -224,6 +284,8 @@ class AstroApp(App):
     #form.shown { display: block; }
     #city-results { display: none; height: auto; max-height: 10; border-top: solid $primary; }
     DataTable { height: 1fr; }
+    MaximizeScreen { background: $surface; align: center middle; }
+    MaximizeScreen WheelView { width: 1fr; height: 1fr; }
     """
     BINDINGS = [
         Binding("n", "new_person", "add person"),
@@ -231,6 +293,7 @@ class AstroApp(App):
         Binding("e", "edit_person", "edit person"),
         Binding("s", "synastry_partner", "synastry partner"),
         Binding("r", "refresh", "refresh"),
+        Binding("m", "maximize_wheel", "maximize wheel"),
         Binding("q", "quit", "quit"),
     ]
 
@@ -251,24 +314,29 @@ class AstroApp(App):
                 with TabPane("natal", id="tab-natal"):
                     with VerticalScroll():
                         yield Static("pick a person", classes="pre", id="natal-out")
-                        yield Static("", classes="pre", id="natal-wheel")
+                        yield WheelView("", classes="pre", id="natal-wheel")
                 with TabPane("aspects", id="tab-aspects"):
                     with VerticalScroll():
+                        # colored glyph graph FIRST, then the plain text list
+                        # (john: "make it come before the text list of them")
+                        yield Static("", classes="pre", id="aspects-graph")
                         yield Static("", classes="pre", id="aspects-out")
                         yield Static("", classes="pre", id="aspects-grid")
-                        yield Static("", classes="pre", id="aspects-wheel")
+                        yield WheelView("", classes="pre", id="aspects-wheel")
                 with TabPane("transits", id="tab-transits"):
                     with VerticalScroll():
                         yield DataTable(id="transit-table")
                         yield Static("", classes="pre", id="transit-detail")
-                        yield Static("", classes="pre", id="transit-wheel")
+                        yield WheelView("", classes="pre", id="transit-wheel")
                 with TabPane("wheel", id="tab-wheel"):
                     yield Static("", classes="pre", id="wheel-out")
                 with TabPane("synastry", id="tab-synastry"):
                     with VerticalScroll():
                         yield Select([("choose partner...", None)], id="synastry-partner", allow_blank=True)
+                        # graph before the text list here too
+                        yield Static("", classes="pre", id="synastry-graph")
                         yield Static("", classes="pre", id="synastry-out")
-                        yield Static("", classes="pre", id="synastry-wheel")
+                        yield WheelView("", classes="pre", id="synastry-wheel")
                 with TabPane("lore", id="tab-lore"):
                     with VerticalScroll():
                         yield Static(lore_text(), classes="pre", id="lore-out")
@@ -322,23 +390,54 @@ class AstroApp(App):
 
     def _wheel_image(self, person: astrolog.Person,
                      partner: astrolog.Person | None = None):
-        """astrolog's graphic wheel as a textual-image renderable (PIL-backed,
-        so it uses the right display protocol for the terminal instead of the
-        hand-rolled halfblock rendering that produced the wonky squares)."""
+        """astrolog's graphic wheel as a raw PIL image (the WheelView widgets
+        wrap it in a renderable themselves and keep the image around so it can
+        be maximized full-screen)."""
         try:
-            img = astrolog.wheel_image(person.path,
-                                       partner.path if partner else None)
-            return AutoImageRenderable(img)
-        except Exception as e:
-            return Text(f"wheel render failed: {e}")
+            return astrolog.wheel_image(person.path,
+                                        partner.path if partner else None)
+        except Exception:
+            return None
+
+    def _set_wheel(self, selector: str, img) -> None:
+        """update a WheelView widget: render the image (if any) and keep the
+        raw PIL image on the widget so clicking it / pressing 'm' can
+        maximize it full-screen."""
+        w = self.query_one(selector, WheelView)
+        w.image = img
+        w.update(AutoImageRenderable(img) if img is not None
+                 else Text("wheel render failed"))
+
+    def action_maximize_wheel(self, image=None) -> None:
+        """maximize the wheel image full-screen. 'image' is passed directly by
+        WheelView clicks; the 'm' hotkey grabs the image from the wheel view
+        in the currently active tab."""
+        if image is None:
+            tab = self.query_one("#content", TabbedContent).active
+            wid = {"tab-natal": "#natal-wheel",
+                   "tab-aspects": "#aspects-wheel",
+                   "tab-transits": "#transit-wheel",
+                   "tab-synastry": "#synastry-wheel"}.get(tab)
+            if wid is None:
+                self.notify("no wheel on this tab", severity="warning")
+                return
+            image = self.query_one(wid, WheelView).image
+        if image is None:
+            self.notify("no wheel image to maximize", severity="warning")
+            return
+        self.push_screen(MaximizeScreen(image))
 
     def show_person(self, person: astrolog.Person) -> None:
         try:
             natal = astrolog.natal_positions(person.path)
             self.query_one("#natal-out", Static).update(
                 person.summary + "\n\n" + render_positions(natal))
+            aspects_text = astrolog.natal_aspects(person.path)
+            # colored glyph graph first, plain text list after it
+            self.query_one("#aspects-graph", Static).update(
+                render_aspect_graph(aspects_text))
             self.query_one("#aspects-out", Static).update(
-                render_aspects(astrolog.natal_aspects(person.path)))
+                render_aspects(aspects_text))
             # astrolog's own matrix view of every body pair (-g) — the
             # "better table of aspects" john asked for
             self.query_one("#aspects-grid", Static).update(
@@ -348,7 +447,7 @@ class AstroApp(App):
             # synastry gets the overlay image once a partner is picked
             img = self._wheel_image(person)
             for wid in ("natal-wheel", "aspects-wheel", "transit-wheel"):
-                self.query_one(f"#{wid}", Static).update(img)
+                self._set_wheel(f"#{wid}", img)
             self.load_transit_events(person)
             self.refresh_synastry_options(person)
             # keep focus on the table so the user can arrow to another row
@@ -364,8 +463,9 @@ class AstroApp(App):
             [(p.name, str(p.path)) for p in self.people
              if p.path != person.path])
         sel.value = None
+        self.query_one("#synastry-graph", Static).update("")
         self.query_one("#synastry-out", Static).update("")
-        self.query_one("#synastry-wheel", Static).update("")
+        self._set_wheel("#synastry-wheel", None)
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "synastry-partner" or event.value is None:
@@ -380,11 +480,14 @@ class AstroApp(App):
                       partner: astrolog.Person) -> None:
         try:
             text = astrolog.synastry_aspects(person.path, partner.path)
+            # colored glyph graph before the text list (same as natal)
+            self.query_one("#synastry-graph", Static).update(
+                render_aspect_graph(text))
             self.query_one("#synastry-out", Static).update(
                 f"{person.name} <-> {partner.name} "
                 f"(sorted by power):\n" + render_aspects(text))
-            self.query_one("#synastry-wheel", Static).update(
-                self._wheel_image(person, partner))
+            self._set_wheel("#synastry-wheel",
+                            self._wheel_image(person, partner))
             self.notify(f"synastry: {person.name} x {partner.name}")
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")

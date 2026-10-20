@@ -116,3 +116,45 @@ def test_person_round_trip_requires_astrolog():
         assert (back.year, back.month, back.day) == (1990, 5, 15)
         assert back.zone == "6W" and back.dst == 0
         assert back.lon == "97W37" and back.lat == "30N28"
+
+
+def test_glyphs_and_colors():
+    """the glyph/color tables john asked for (symbols for signs/planets, colors)."""
+    assert astrolog.planet_glyph("Sun") == "☉"
+    assert astrolog.planet_glyph("North Node") == "☊"
+    assert astrolog.planet_glyph("Ascendant") == "AC"
+    assert astrolog.planet_glyph("Unknown Body") == "Un"  # graceful fallback
+    assert astrolog.sign_glyph("Tau") == "♉" and astrolog.sign_glyph("tau") == "♉"
+    assert astrolog.sign_glyph("Taurus") == "♉"
+    assert astrolog.sign_glyph("Bad") == "Bad"
+    assert astrolog.aspect_glyph("Con") == "☌" and astrolog.aspect_glyph("Tri") == "△"
+    assert astrolog.planet_color("Sun") == "yellow"
+    assert astrolog.planet_color("Mars") == "red"
+    assert astrolog.aspect_color("Con") == "bold red"
+    assert astrolog.aspect_color("Squ") == "orange1"
+    # unknown things fall back, never crash
+    assert astrolog.planet_color("Zzz") == "white"
+    assert astrolog.aspect_color("Zzz") == "grey50"
+
+
+def test_render_aspect_graph_glyphs_and_order():
+    """the aspect graph is a rich Text with colored glyphs for the real
+    sample chart, and no-crash behavior on empty/garbage input."""
+    from rich.text import Text
+
+    from astro_tui.app import render_aspect_graph
+
+    t = render_aspect_graph(NATAL_A)
+    assert isinstance(t, Text)
+    plain = t.plain
+    assert "☉" in plain and "MC" in plain          # Sun conj Midheaven
+    assert "♉" in plain                            # Tau sign glyphs
+    assert "☌" in plain and "□" in plain and "△" in plain
+    # rich styles actually applied (colored spans, not just plain text)
+    styles = {s.style for s in t.spans}
+    assert "bold red" in styles and "yellow" in styles
+    # garbage input doesn't crash and says something sane
+    empty = render_aspect_graph("")
+    assert "no aspects" in empty.plain
+    junk = render_aspect_graph("complete nonsense\nnot aspects at all")
+    assert isinstance(junk, Text)

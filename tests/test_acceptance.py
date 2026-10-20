@@ -199,6 +199,14 @@ async def test_journey_select_person_shows_natal_aspects_transits(app):
         assert "Sun" in str(natal) and "house" in str(natal)
         aspects = app.query_one("#aspects-out").content
         assert "orb" in str(aspects) and "power" in str(aspects)
+        # colored glyph graph: populated, uses planet/aspect glyphs, and sits
+        # BEFORE the plain text list in the DOM (john's layout ask)
+        graph = str(app.query_one("#aspects-graph").content)
+        assert "☌" in graph and "△" in graph and "□" in graph
+        assert "☉" in graph and "♉" in graph  # real planet+sign glyphs
+        statics = [w.id for w in app.query("#tab-aspects Static")]
+        assert statics.index("aspects-graph") < statics.index("aspects-out"), \
+            "graph must come before the text list"
         transit_table = app.query_one("#transit-table")
         assert transit_table.row_count > 0
         assert app.selected is not None
@@ -337,4 +345,44 @@ async def test_journey_city_search_autofills(app, monkeypatch):
         saved = app_module.people_dir() / "geo-kid.json"
         meta = json.loads(saved.read_text())
         assert meta["zone"] == "5W" and meta["dst"] == 1  # CDT, not manual 6W
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_wheel_maximizes_via_hotkey(app):
+    """select a person, press 'm' -> full-screen MaximizeScreen; escape closes."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#natal-wheel", app_module.WheelView).image is not None
+        await pilot.press("m")
+        await pilot.pause()
+        from astro_tui.app import MaximizeScreen
+        assert isinstance(app.screen, MaximizeScreen), \
+            f"hotkey m should push MaximizeScreen, got {type(app.screen)}"
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, MaximizeScreen)
+        await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_wheel_maximizes_via_click(app):
+    """clicking the wheel image maximizes it (john: 'images maximize when
+    you click them'); clicking inside the modal closes it again."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        await pilot.click("#people-table", offset=(4, 1))
+        await pilot.pause()
+        await pilot.click("#natal-wheel")
+        await pilot.pause()
+        from astro_tui.app import MaximizeScreen
+        assert isinstance(app.screen, MaximizeScreen), \
+            f"clicking the wheel should push MaximizeScreen, got {type(app.screen)}"
+        await pilot.click("#maximized-wheel")  # click inside the modal -> dismiss
+        await pilot.pause()
+        assert not isinstance(app.screen, MaximizeScreen)
         await pilot.press("q")
