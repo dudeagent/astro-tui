@@ -417,14 +417,21 @@ def render_bmp_ansi(data: bytes, cols: int = 44, rows: int = 24) -> str:
     return "\n".join(out)
 
 
+# two wheel sizes are generated per chart (john: "generate two sizes and
+# make the larger one 80% screen size and centered"): a small one for the
+# in-tab wheel views and a large high-res one for the full-screen maximize.
+WHEEL_SMALL_SIZE = 760
+WHEEL_LARGE_SIZE = 2048
+
+
 def wheel_image(chart: Path, partner: Path | None = None,
-                width: int = 2048):
+                width: int = WHEEL_LARGE_SIZE):
     """astrolog's graphic wheel as a PIL image (for textual-image display).
     same -Xb0/-Xo/-w invocation as wheel_bitmap; returns a Pillow Image.
 
-    'width' passes through to wheel_bitmap (astrolog -Xw) so the generated
-    bitmap is high-resolution; the default is large enough that a maximized
-    wheel fills a full-screen terminal window.
+    'width' passes through to wheel_bitmap (astrolog -Xw). use the large
+    size when a wheel is about to be maximized full-screen, the small one
+    for the in-tab wheel views.
     """
     from PIL import Image
     import io

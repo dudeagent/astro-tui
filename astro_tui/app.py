@@ -81,16 +81,18 @@ class WheelView(Static):
     image full-screen (same as the 'm' hotkey)."""
 
     image = None
+    big_image = None
 
     def on_click(self, event) -> None:
-        if self.image is None:
+        # the big (high-res) image is the one to maximize
+        if self.image is None and self.big_image is None:
             return
         # inside MaximizeScreen a click dismisses it instead of pushing
         # another maximize on top of itself
         if isinstance(self.screen, MaximizeScreen):
             self.screen.dismiss()
         else:
-            self.app.action_maximize_wheel(self.image)
+            self.app.action_maximize_wheel(self.big_image or self.image)
 
 
 class MaximizeScreen(ModalScreen):
@@ -113,6 +115,7 @@ class MaximizeScreen(ModalScreen):
                       else Text("no wheel image"))
         view = WheelView(renderable, id="maximized-wheel")
         view.image = self.image
+        view.big_image = self.image
         yield view
 
 class PersonForm(Static):
@@ -290,7 +293,9 @@ class AstroApp(App):
     #city-results { display: none; height: auto; max-height: 10; border-top: solid $primary; }
     DataTable { height: 1fr; }
     MaximizeScreen { background: $surface; align: center middle; }
-    MaximizeScreen WheelView { width: 1fr; height: 1fr; }
+    # maximized wheel: 80% of the screen, centered (john: "make the larger
+    # one 80% screen size and centered")
+    MaximizeScreen WheelView { width: 80%; height: 80%; }
     """
     BINDINGS = [
         Binding("n", "new_person", "add person"),
@@ -396,22 +401,29 @@ class AstroApp(App):
             self.show_transit_detail(event.row_key)
 
     def _wheel_image(self, person: astrolog.Person,
-                     partner: astrolog.Person | None = None):
-        """astrolog's graphic wheel as a raw PIL image (the WheelView widgets
-        wrap it in a renderable themselves and keep the image around so it can
-        be maximized full-screen)."""
+                     partner: astrolog.Person | None = None,
+                     width: int = astrolog.WHEEL_SMALL_SIZE):
+        """astrolog's graphic wheel as a raw PIL image. two sizes are
+        generated per chart (john: "generate two sizes and make the larger
+        one 80% screen size and centered"): astrolog.WHEEL_SMALL_SIZE for the in-tab
+        wheel views, astrolog.WHEEL_LARGE_SIZE when a wheel is maximized.
+        `width` passes through to astrolog's -Xw; the wheel view widgets wrap
+        the image in a renderable themselves."""
         try:
             return astrolog.wheel_image(person.path,
-                                        partner.path if partner else None)
+                                        partner.path if partner else None,
+                                        width=width)
         except Exception:
             return None
 
-    def _set_wheel(self, selector: str, img) -> None:
-        """update a WheelView widget: render the image (if any) and keep the
-        raw PIL image on the widget so clicking it / pressing 'm' can
-        maximize it full-screen."""
+    def _set_wheel(self, selector: str, img, big_img=None) -> None:
+        """update a WheelView widget: render the (small) image for the tab
+        and keep both sizes on the widget — `image` is what's displayed,
+        `big_image` is the high-res version used when the wheel is
+        maximized (falls back to `image` if no big one was generated)."""
         w = self.query_one(selector, WheelView)
         w.image = img
+        w.big_image = big_img if big_img is not None else img
         w.update(AutoImageRenderable(img) if img is not None
                  else Text("wheel render failed"))
 
@@ -429,7 +441,9 @@ class AstroApp(App):
             if wid is None:
                 self.notify("no wheel on this tab", severity="warning")
                 return
-            image = self.query_one(wid, WheelView).image
+            view = self.query_one(wid, WheelView)
+            # the big (high-res) image is what gets maximized
+            image = view.big_image
         if image is None:
             self.notify("no wheel image to maximize", severity="warning")
             return
@@ -453,10 +467,12 @@ class AstroApp(App):
             # graphic wheel on every chart screen (natal/aspects/transits),
             # the dedicated wheel tab, and synastry gets the overlay image
             # once a partner is picked
+            # two sizes: small for the in-tab wheels, large for maximize
             img = self._wheel_image(person)
+            big = self._wheel_image(person, width=astrolog.WHEEL_LARGE_SIZE)
             for wid in ("natal-wheel", "aspects-wheel", "transit-wheel",
                         "big-wheel"):
-                self._set_wheel(f"#{wid}", img)
+                self._set_wheel(f"#{wid}", img, big)
             self.load_transit_events(person)
             self.refresh_synastry_options(person)
             # keep focus on the table so the user can arrow to another row
@@ -496,7 +512,9 @@ class AstroApp(App):
                 f"{person.name} <-> {partner.name} "
                 f"(sorted by power):\n" + render_aspects(text))
             self._set_wheel("#synastry-wheel",
-                            self._wheel_image(person, partner))
+                            self._wheel_image(person, partner),
+                            self._wheel_image(person, partner,
+                                              width=astrolog.WHEEL_LARGE_SIZE))
             self.notify(f"synastry: {person.name} x {partner.name}")
         except astrolog.AstrologError as e:
             self.notify(str(e), severity="error")

@@ -454,3 +454,46 @@ async def test_journey_wheel_maximizes_via_click(app):
         await pilot.pause()
         assert not isinstance(app.screen, MaximizeScreen)
         await pilot.press("q")
+
+
+@pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
+async def test_journey_wheel_two_sizes(app):
+    """john: 'revert to the bmp, generate two sizes and make the larger one
+    80% screen size and centered'. selecting a person generates both a small
+    in-tab wheel and a large high-res one; maximizing shows the large image
+    in a view that takes 80% of the screen and is centered."""
+    async with app.run_test(size=(120, 40)) as pilot:
+        await seed_person(app)
+        table = app.query_one("#people-table")
+        table.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+        wheel = app.query_one("#natal-wheel", app_module.WheelView)
+        assert wheel.image is not None, "natal wheel must hold a PIL image"
+        assert wheel.big_image is not None, "large wheel must be generated too"
+        # astrolog pads -Xw wider than requested (760 -> 920), so assert
+        # relative sizes: two distinct sizes, large one at/above the big size
+        assert wheel.big_image.size[0] > wheel.image.size[0], \
+            f"large wheel must be bigger than the in-tab one: " \
+            f"small={wheel.image.size} big={wheel.big_image.size}"
+        assert wheel.image.size[0] < astrolog.WHEEL_LARGE_SIZE, \
+            f"in-tab wheel should be the small size, got {wheel.image.size}"
+        assert wheel.big_image.size[0] >= astrolog.WHEEL_LARGE_SIZE, \
+            f"big wheel should be at least the large size, got {wheel.big_image.size}"
+        # maximize: the large image is what gets pushed to the modal
+        await pilot.press("m")
+        await pilot.pause()
+        from astro_tui.app import MaximizeScreen
+        assert isinstance(app.screen, MaximizeScreen)
+        maxw = app.screen.query_one("#maximized-wheel", app_module.WheelView)
+        assert maxw.image.size[0] >= astrolog.WHEEL_LARGE_SIZE, \
+            "maximize must show the large image"
+        # 80% of the 120x40 test terminal, centered
+        region = maxw.region
+        assert (region.width, region.height) == (96, 32), \
+            f"maximized wheel should be 80% of the screen, got {region}"
+        assert region.x == 12 and region.y == 4, \
+            f"maximized wheel should be centered, got {region}"
+        await pilot.press("escape")
+        await pilot.pause()
+        await pilot.press("q")
