@@ -350,19 +350,23 @@ def synastry_aspects(c1: Path, c2: Path) -> str:
 
 
 def wheel_bitmap(chart: Path, partner: Path | None = None,
-                 tmp_dir: Path | None = None) -> bytes:
+                 tmp_dir: Path | None = None, width: int = 2048) -> bytes:
     """astrolog's graphic wheel as BMP bytes. with a partner chart it
     draws the synastry overlay (-r0 file1 file2 -w).
 
     arg order matters: -r0 <f1> <f2> must come before -Xb0/-Xo, or astrolog
     tries to open the switches as chart files.
+
+    'width' is the horizontal pixel size of the rendered graphic (-Xw);
+    default 2048 so the wheel is high-resolution and can be maximized
+    full-screen without being a tiny upscaled blob.
     """
     if tmp_dir is None:
         tmp_dir = Path(tempfile.mkdtemp(prefix="astro-tui-"))
     out = tmp_dir / "wheel.bmp"
     args = (["-r0", str(chart), str(partner)] if partner
             else ["-i", str(chart)])
-    run(args + ["-Xb0", "-Xo", str(out), "-w"])
+    run(args + [f"-Xw", str(width), "-Xb0", "-Xo", str(out), "-w"])
     data = out.read_bytes()
     out.unlink(missing_ok=True)
     return data
@@ -413,13 +417,18 @@ def render_bmp_ansi(data: bytes, cols: int = 44, rows: int = 24) -> str:
     return "\n".join(out)
 
 
-def wheel_image(chart: Path, partner: Path | None = None):
+def wheel_image(chart: Path, partner: Path | None = None,
+                width: int = 2048):
     """astrolog's graphic wheel as a PIL image (for textual-image display).
     same -Xb0/-Xo/-w invocation as wheel_bitmap; returns a Pillow Image.
+
+    'width' passes through to wheel_bitmap (astrolog -Xw) so the generated
+    bitmap is high-resolution; the default is large enough that a maximized
+    wheel fills a full-screen terminal window.
     """
     from PIL import Image
     import io
-    data = wheel_bitmap(chart, partner)
+    data = wheel_bitmap(chart, partner, width=width)
     return Image.open(io.BytesIO(data))
 
 
