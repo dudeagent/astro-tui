@@ -96,16 +96,26 @@ class WheelView(Static):
 
 
 class MaximizeScreen(ModalScreen):
-    """full-screen modal showing one wheel image bigger. click anywhere or
-    press escape/q/m to close."""
+    """modal showing one wheel image bigger. default 60% of the screen and
+    centered (john: 80% overflowed the bottom); +/- or arrow keys resize it
+    live (textual 8.x has no slider widget — this is the slider). click the
+    image or press escape/q/m to close."""
 
     BINDINGS = [Binding("escape", "dismiss", "close"),
                 Binding("q", "dismiss", "close"),
-                Binding("m", "dismiss", "close")]
+                Binding("m", "dismiss", "close"),
+                Binding("plus,right", "grow", "bigger"),
+                Binding("minus,left", "shrink", "smaller")]
+
+    WHEEL_DEFAULT_PERCENT = 60
+    WHEEL_MIN_PERCENT = 30
+    WHEEL_MAX_PERCENT = 100
+    WHEEL_STEP_PERCENT = 10
 
     def __init__(self, image) -> None:
         super().__init__()
         self.image = image
+        self.percent = self.WHEEL_DEFAULT_PERCENT
 
     def compose(self) -> ComposeResult:
         # the image must be passed to the Static itself — setting view.image
@@ -116,7 +126,22 @@ class MaximizeScreen(ModalScreen):
         view = WheelView(renderable, id="maximized-wheel")
         view.image = self.image
         view.big_image = self.image
-        yield view
+        with Vertical(id="max-wrap"):
+            yield view
+
+    def action_grow(self) -> None:
+        self._set_percent(self.percent + self.WHEEL_STEP_PERCENT)
+
+    def action_shrink(self) -> None:
+        self._set_percent(self.percent - self.WHEEL_STEP_PERCENT)
+
+    def _set_percent(self, p: int) -> None:
+        """clamp + apply the wheel size as a screen percentage."""
+        self.percent = max(self.WHEEL_MIN_PERCENT,
+                           min(self.WHEEL_MAX_PERCENT, p))
+        view = self.query_one("#maximized-wheel", WheelView)
+        view.styles.width = f"{self.percent}%"
+        view.styles.height = f"{self.percent}%"
 
 class PersonForm(Static):
     """modal form to add a person (writes an astrolog chart file)."""
@@ -293,9 +318,18 @@ class AstroApp(App):
     #city-results { display: none; height: auto; max-height: 10; border-top: solid $primary; }
     DataTable { height: 1fr; }
     MaximizeScreen { background: $surface; align: center middle; }
-    # maximized wheel: 80% of the screen, centered (john: "make the larger
-    # one 80% screen size and centered")
-    MaximizeScreen WheelView { width: 80%; height: 80%; }
+    # maximized wheel: 60% of the screen by default, centered, +/- / arrows
+    # resize live (john: "80% still too big, bottom gets cutoff, make default
+    # smaller and maybe a size adjust slider")
+    MaximizeScreen {
+        align: center middle;
+    }
+    MaximizeScreen #max-wrap {
+        width: 100%;
+        height: 100%;
+        align: center middle;
+    }
+    MaximizeScreen WheelView { width: 60%; height: 60%; }
     """
     BINDINGS = [
         Binding("n", "new_person", "add person"),

@@ -459,10 +459,11 @@ async def test_journey_wheel_maximizes_via_click(app):
 
 @pytest.mark.skipif(not HAS_ASTROLOG, reason="astrolog binary not on PATH")
 async def test_journey_wheel_two_sizes(app):
-    """john: 'revert to the bmp, generate two sizes and make the larger one
-    80% screen size and centered'. selecting a person generates both a small
-    in-tab wheel and a large high-res one; maximizing shows the large image
-    in a view that takes 80% of the screen and is centered."""
+    """john: 'revert to the bmp, generate two sizes' + '80% still too big,
+    bottom gets cutoff, make default smaller and maybe a size adjust slider'.
+    selecting a person generates a small in-tab wheel and a large high-res
+    one; maximizing shows the large image in a view at 60% of the screen
+    (default) with a slider that adjusts the size live."""
     async with app.run_test(size=(120, 40)) as pilot:
         await seed_person(app)
         table = app.query_one("#people-table")
@@ -489,12 +490,26 @@ async def test_journey_wheel_two_sizes(app):
         maxw = app.screen.query_one("#maximized-wheel", app_module.WheelView)
         assert maxw.image.size[0] >= astrolog.WHEEL_LARGE_SIZE, \
             "maximize must show the large image"
-        # 80% of the 120x40 test terminal, centered
+        # 60% of the 120x40 test terminal, centered
+        region = maxw.region
+        assert (region.width, region.height) == (72, 24), \
+            f"maximized wheel should be 60% of the screen, got {region}"
+        assert region.x == 24 and region.y == 8, \
+            f"maximized wheel should be centered, got {region}"
+        # +/- / arrow keys resize live (the slider substitute)
+        await pilot.press("right")
+        await pilot.press("right")
+        await pilot.pause()
         region = maxw.region
         assert (region.width, region.height) == (96, 32), \
-            f"maximized wheel should be 80% of the screen, got {region}"
-        assert region.x == 12 and region.y == 4, \
-            f"maximized wheel should be centered, got {region}"
+            f"two arrow presses (60->80%) should resize the wheel, got {region}"
+        # shrinking clamps at the floor rather than disappearing
+        for _ in range(10):
+            await pilot.press("minus")
+        await pilot.pause()
+        minw = app.screen.WHEEL_MIN_PERCENT
+        assert maxw.region.width == 120 * minw // 100, \
+            f"wheel should clamp at {minw}% width, got {maxw.region}"
         await pilot.press("escape")
         await pilot.pause()
         await pilot.press("q")
